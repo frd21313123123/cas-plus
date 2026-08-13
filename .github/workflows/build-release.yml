@@ -34,7 +34,7 @@ jobs:
           $out = Join-Path $env:GITHUB_WORKSPACE 'artifacts\dll'
           New-Item -ItemType Directory -Path $out -Force | Out-Null
 
-          msbuild '.\src\MyLibrary.vcxproj' `
+          msbuild '.\payload\PotatoPayload.vcxproj' `
             /m `
             /t:Rebuild `
             /p:Configuration=Release `
@@ -72,7 +72,7 @@ jobs:
           $out = Join-Path $env:GITHUB_WORKSPACE 'artifacts\exe'
           New-Item -ItemType Directory -Path $out -Force | Out-Null
 
-          msbuild '.\src\MyApp.vcxproj' `
+          msbuild '.\injector\potatoInjector.vcxproj' `
             /m `
             /t:Rebuild `
             /p:Configuration=Release `
