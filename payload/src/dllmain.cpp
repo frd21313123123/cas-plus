@@ -184,10 +184,153 @@ __declspec(dllimport) BOOL WINAPI SetWindowPos(HWND, HWND, int, int, int, int, U
 __declspec(dllimport) LRESULT WINAPI SendMessageW(HWND, UINT, WPARAM, LPARAM);
 __declspec(dllimport) BOOL WINAPI SetWindowTextW(HWND, LPCWSTR);
 __declspec(dllimport) BOOL WINAPI PostMessageW(HWND, UINT, WPARAM, LPARAM);
+using HDC = void*;
+using HGDIOBJ = void*;
+using HPEN = void*;
+using HFONT = void*;
+using HBITMAP = void*;
+using COLORREF = unsigned long;
+
+struct PAINTSTRUCT {
+    HDC hdc;
+    BOOL fErase;
+    RECT rcPaint;
+    BOOL fRestore;
+    BOOL fIncUpdate;
+    BYTE rgbReserved[32];
+};
+
+#define WM_ERASEBKGND     0x0014
+#define WM_PAINT          0x000F
+#define WM_LBUTTONDOWN    0x0201
+#define WM_LBUTTONUP      0x0202
+#define WM_MOUSEMOVE      0x0200
+#define WM_CTLCOLORBTN    0x0135
+#define WM_CTLCOLORSTATIC 0x0138
+#define TRANSPARENT 1
+
+#define FALSE 0
+#define TRUE 1
+
+#define DEFAULT_CHARSET 1
+#define OUT_DEFAULT_PRECIS 0
+#define CLIP_DEFAULT_PRECIS 0
+#define DEFAULT_QUALITY 0
+#define DEFAULT_PITCH 0
+#define FF_DONTCARE (0 << 4)
+
+#define PS_SOLID        0
+#define DT_CENTER       0x00000001
+#define DT_VCENTER      0x00000004
+#define DT_SINGLELINE   0x00000020
+#define DT_LEFT         0x00000000
+#define DT_RIGHT        0x00000002
+
+__declspec(dllimport) HGDIOBJ WINAPI GetStockObject(int);
+__declspec(dllimport) BOOL WINAPI Rectangle(HDC, int, int, int, int);
+__declspec(dllimport) HBRUSH WINAPI CreateSolidBrush(COLORREF);
+__declspec(dllimport) COLORREF WINAPI SetTextColor(HDC, COLORREF);
+__declspec(dllimport) COLORREF WINAPI SetBkColor(HDC, COLORREF);
+__declspec(dllimport) int WINAPI SetBkMode(HDC, int);
+__declspec(dllimport) BOOL WINAPI FillRect(HDC, const RECT*, HBRUSH);
+__declspec(dllimport) BOOL WINAPI DeleteObject(HGDIOBJ);
+
+__declspec(dllimport) HDC WINAPI BeginPaint(HWND, PAINTSTRUCT*);
+__declspec(dllimport) BOOL WINAPI EndPaint(HWND, const PAINTSTRUCT*);
+__declspec(dllimport) HDC WINAPI GetDC(HWND);
+__declspec(dllimport) int WINAPI ReleaseDC(HWND, HDC);
+__declspec(dllimport) HDC WINAPI CreateCompatibleDC(HDC);
+__declspec(dllimport) HBITMAP WINAPI CreateCompatibleBitmap(HDC, int, int);
+__declspec(dllimport) HGDIOBJ WINAPI SelectObject(HDC, HGDIOBJ);
+__declspec(dllimport) BOOL WINAPI BitBlt(HDC, int, int, int, int, HDC, int, int, DWORD);
+__declspec(dllimport) BOOL WINAPI DeleteDC(HDC);
+__declspec(dllimport) HPEN WINAPI CreatePen(int, int, COLORREF);
+__declspec(dllimport) HFONT WINAPI CreateFontW(int, int, int, int, int, DWORD, DWORD, DWORD, DWORD, DWORD, DWORD, DWORD, DWORD, LPCWSTR);
+__declspec(dllimport) BOOL WINAPI RoundRect(HDC, int, int, int, int, int, int);
+__declspec(dllimport) BOOL WINAPI Ellipse(HDC, int, int, int, int);
+__declspec(dllimport) BOOL WINAPI Polygon(HDC, const POINT*, int);
+__declspec(dllimport) int WINAPI DrawTextW(HDC, LPCWSTR, int, RECT*, UINT);
+__declspec(dllimport) BOOL WINAPI LineTo(HDC, int, int);
+__declspec(dllimport) BOOL WINAPI MoveToEx(HDC, int, int, POINT*);
+__declspec(dllimport) BOOL WINAPI InvalidateRect(HWND, const RECT*, BOOL);
+__declspec(dllimport) BOOL WINAPI GetCursorPos(POINT*);
+__declspec(dllimport) BOOL WINAPI ScreenToClient(HWND, POINT*);
+
 #ifdef POTATO_DIAGNOSTIC
 __declspec(dllimport) int WINAPI MessageBoxW(HWND, LPCWSTR, LPCWSTR, UINT);
 #endif
 }
+
+#define RGB_COLOR(r,g,b) ((COLORREF)(((BYTE)(r)|((WORD)((BYTE)(g))<<8))|(((DWORD)(BYTE)(b))<<16)))
+
+static const COLORREF kColorPresets[] = {
+    RGB_COLOR(255, 255, 255), // 0: White
+    RGB_COLOR(132, 204, 22),  // 1: Lime Green
+    RGB_COLOR(56, 189, 248),  // 2: Sky Blue
+    RGB_COLOR(37, 99, 235),   // 3: Dark Blue
+    RGB_COLOR(239, 68, 68),   // 4: Red
+    RGB_COLOR(249, 115, 22),  // 5: Orange
+    RGB_COLOR(234, 179, 8),   // 6: Yellow
+    RGB_COLOR(168, 85, 247),  // 7: Purple
+    RGB_COLOR(0, 0, 0)        // 8: Black
+};
+
+struct RGBVal {
+    BYTE r = 255;
+    BYTE g = 255;
+    BYTE b = 255;
+
+    COLORREF ToRef() const {
+        return RGB_COLOR(r, g, b);
+    }
+};
+
+struct ESPConfig {
+    bool enable = true;
+
+    bool skeleton = false;
+    RGBVal skeletonColor = { 255, 255, 255 };
+
+    bool historySkeleton = false;
+    RGBVal historySkeletonColor = { 255, 255, 255 };
+    int historyTicks = 12;
+
+    bool aimHistorySkeleton = false;
+    RGBVal aimHistorySkeletonColor = { 255, 255, 255 };
+
+    bool footsteps = true;
+    RGBVal footstepsColor = { 56, 189, 248 };
+
+    bool glow = false;
+    RGBVal glowColor = { 37, 99, 235 };
+
+    bool chams = true;
+    RGBVal chamsColorOccluded = { 239, 68, 68 }; // Color 1: Red (Behind Wall)
+    RGBVal chamsColorVisible = { 132, 204, 22 };  // Color 2: Lime Green (In Sight)
+
+    bool offScreen = true;
+    RGBVal offScreenColor = { 56, 189, 248 };
+
+    // Flags for Preview & Highlighting
+    bool flagHK = true;
+    bool flagZoom = true;
+    bool flagBlind = true;
+    bool flagReload = true;
+    bool flagC4 = true;
+    bool flagVIP = true;
+    bool flagDefuse = true;
+    bool flagPin = true;
+
+    bool showManageModal = false;
+    bool showRgbPickerModal = false;
+    RGBVal* targetRgbColor = nullptr;
+    const wchar_t* targetRgbTitle = L"Color Picker";
+
+    int selectedTab = 2; // 0: Ragebot, 1: Anti-Aim, 2: Visuals (ESP), 3: Misc, 4: Configs
+};
+
+static ESPConfig g_espConfig{};
+
 
 extern "C" __declspec(dllexport) void* PotatoRelocationAnchor = &PotatoRelocationAnchor;
 
@@ -1841,24 +1984,34 @@ static bool ApplyBotHighlight(const BotHighlightRuntime& runtime,
     if (original)
         original->seen = true;
 
-    // RGBA bright red for enemy team. Glow is requested first; the client tint
-    // makes the feature visibly useful across renderer paths.
-    const BYTE highlightColor[4] = { 255, 64, 64, 255 };
-    const bool stateAlreadyApplied = (*useClientTint == 1) &&
-        (*eligible == 1) && (*glowing == 1) &&
-        (renderColor[0] == highlightColor[0] && renderColor[1] == highlightColor[1] && renderColor[2] == highlightColor[2]) &&
-        (clientTint[0] == highlightColor[0] && clientTint[1] == highlightColor[1] && clientTint[2] == highlightColor[2]);
+    if (!g_espConfig.enable)
+        return false;
 
-    if (!stateAlreadyApplied)
+    // Check if enemy pawn is spotted / visible or occluded behind wall
+    BYTE* spotted = reinterpret_cast<BYTE*>(pawn) + 0x8;
+    bool isOccluded = true;
+    if (IsAccessible(spotted, 1, false) && *spotted != 0)
+        isOccluded = false;
+
+    // Dual-color Chams: Color 1 (Occluded / Behind Wall) vs Color 2 (Visible / In Sight)
+    const RGBVal activeChams = isOccluded ? g_espConfig.chamsColorOccluded : g_espConfig.chamsColorVisible;
+    const BYTE highlightColor[4] = { activeChams.r, activeChams.g, activeChams.b, 255 };
+    const BYTE glowHighlightColor[4] = { g_espConfig.glowColor.r, g_espConfig.glowColor.g, g_espConfig.glowColor.b, 255 };
+
+    // Apply Chams
+    if (g_espConfig.chams)
     {
         CopyFourBytes(renderColor, highlightColor);
         CopyFourBytes(clientTint, highlightColor);
         *useClientTint = 1;
-        runtime.setRenderColor(pawn, highlightColor[0], highlightColor[1],
-            highlightColor[2]);
+        runtime.setRenderColor(pawn, highlightColor[0], highlightColor[1], highlightColor[2]);
+    }
 
-        BYTE* glowBase = reinterpret_cast<BYTE*>(pawn) + runtime.glowOffset;
-        runtime.setGlowColor(glowBase, PackRgba(highlightColor));
+    // Apply Engine Glow (Type 3 = visible through walls)
+    BYTE* glowBase = reinterpret_cast<BYTE*>(pawn) + runtime.glowOffset;
+    if (g_espConfig.glow || g_espConfig.enable)
+    {
+        runtime.setGlowColor(glowBase, PackRgba(glowHighlightColor));
         *eligible = 1;
         runtime.setGlowType(glowBase, 3, 0.0f);
         *glowing = 1;
@@ -2037,10 +2190,9 @@ static int UpdateBotHighlights(BotHighlightStats* stats)
         }
     }
 
-    if (!localController || localTeam < 2 || localTeam > 3)
+    if (localTeam < 2 || localTeam > 3)
     {
-        RestoreAllBotHighlights(stats);
-        return BOT_HIGHLIGHT_WAITING_LOCAL;
+        localTeam = 3; // Fallback CT team so T enemies (team 2) are highlighted
     }
 
     void* localIdentity = IsAccessible(localController, 0x18, false) ?
@@ -2524,44 +2676,721 @@ static void ShowBotHighlightResult(int result, LPARAM packed)
     SetBotStatus(status.text);
 }
 
+static void DrawRoundedCard(HDC hdc, int x, int y, int w, int h, COLORREF bg, COLORREF border, int radius)
+{
+    HPEN pen = CreatePen(PS_SOLID, 1, border);
+    HBRUSH brush = CreateSolidBrush(bg);
+    HGDIOBJ oldPen = SelectObject(hdc, pen);
+    HGDIOBJ oldBrush = SelectObject(hdc, brush);
+    RoundRect(hdc, x, y, x + w, y + h, radius, radius);
+    SelectObject(hdc, oldPen);
+    SelectObject(hdc, oldBrush);
+    DeleteObject(pen);
+    DeleteObject(brush);
+}
+
+static void DrawToggleSwitch(HDC hdc, int x, int y, bool active)
+{
+    COLORREF bg = active ? RGB_COLOR(59, 130, 246) : RGB_COLOR(63, 63, 70);
+    HPEN pen = CreatePen(PS_SOLID, 1, bg);
+    HBRUSH brush = CreateSolidBrush(bg);
+    HGDIOBJ oldPen = SelectObject(hdc, pen);
+    HGDIOBJ oldBrush = SelectObject(hdc, brush);
+    RoundRect(hdc, x, y, x + 38, y + 20, 18, 18);
+    SelectObject(hdc, oldPen);
+    SelectObject(hdc, oldBrush);
+    DeleteObject(pen);
+    DeleteObject(brush);
+
+    int knobX = active ? (x + 20) : (x + 2);
+    HBRUSH knobBrush = CreateSolidBrush(RGB_COLOR(255, 255, 255));
+    HPEN knobPen = CreatePen(PS_SOLID, 1, RGB_COLOR(255, 255, 255));
+    oldPen = SelectObject(hdc, knobPen);
+    oldBrush = SelectObject(hdc, knobBrush);
+    Ellipse(hdc, knobX, y + 2, knobX + 16, y + 18);
+    SelectObject(hdc, oldPen);
+    SelectObject(hdc, oldBrush);
+    DeleteObject(knobPen);
+    DeleteObject(knobBrush);
+}
+
+static void DrawColorSwatch(HDC hdc, int x, int y, COLORREF color)
+{
+    HPEN pen = CreatePen(PS_SOLID, 1, RGB_COLOR(60, 60, 65));
+    HBRUSH brush = CreateSolidBrush(color);
+    HGDIOBJ oldPen = SelectObject(hdc, pen);
+    HGDIOBJ oldBrush = SelectObject(hdc, brush);
+    RoundRect(hdc, x, y, x + 18, y + 18, 4, 4);
+    SelectObject(hdc, oldPen);
+    SelectObject(hdc, oldBrush);
+    DeleteObject(pen);
+    DeleteObject(brush);
+}
+
+static void DrawGearIcon(HDC hdc, int x, int y)
+{
+    HPEN pen = CreatePen(PS_SOLID, 2, RGB_COLOR(113, 113, 122));
+    HGDIOBJ oldPen = SelectObject(hdc, pen);
+    HBRUSH nullBrush = reinterpret_cast<HBRUSH>(SelectObject(hdc, GetStockObject(5)));
+    Ellipse(hdc, x + 3, y + 3, x + 15, y + 15);
+    MoveToEx(hdc, x + 9, y, nullptr); LineTo(hdc, x + 9, y + 4);
+    MoveToEx(hdc, x + 9, y + 14, nullptr); LineTo(hdc, x + 9, y + 18);
+    MoveToEx(hdc, x, y + 9, nullptr); LineTo(hdc, x + 4, y + 9);
+    MoveToEx(hdc, x + 14, y + 9, nullptr); LineTo(hdc, x + 18, y + 9);
+    SelectObject(hdc, oldPen);
+    SelectObject(hdc, nullBrush);
+    DeleteObject(pen);
+}
+
+static void DrawRgbColorPickerModal(HDC hdc, ESPConfig& cfg)
+{
+    if (!cfg.showRgbPickerModal || !cfg.targetRgbColor)
+        return;
+
+    DrawRoundedCard(hdc, 230, 120, 320, 250, RGB_COLOR(28, 28, 34), RGB_COLOR(60, 60, 70), 8);
+
+    HFONT titleFont = CreateFontW(14, 0, 0, 0, 600, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+    HGDIOBJ oldFont = SelectObject(hdc, titleFont);
+    SetBkMode(hdc, TRANSPARENT);
+    SetTextColor(hdc, RGB_COLOR(255, 255, 255));
+
+    RECT tRc = { 245, 132, 530, 155 };
+    DrawTextW(hdc, cfg.targetRgbTitle, -1, &tRc, DT_LEFT | DT_SINGLELINE);
+
+    HFONT fontSmall = CreateFontW(13, 0, 0, 0, 400, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+    SelectObject(hdc, fontSmall);
+
+    RGBVal& cur = *cfg.targetRgbColor;
+
+    // Red Slider
+    SetTextColor(hdc, RGB_COLOR(239, 68, 68));
+    RECT rLbl = { 245, 165, 270, 185 };
+    DrawTextW(hdc, L"R:", -1, &rLbl, DT_LEFT | DT_SINGLELINE);
+    DrawRoundedCard(hdc, 270, 170, 190, 10, RGB_COLOR(40, 40, 48), RGB_COLOR(60, 60, 70), 4);
+    int rKnobX = 270 + (cur.r * 180) / 255;
+    DrawRoundedCard(hdc, rKnobX, 165, 10, 20, RGB_COLOR(239, 68, 68), RGB_COLOR(255, 255, 255), 3);
+
+    // Green Slider
+    SetTextColor(hdc, RGB_COLOR(132, 204, 22));
+    RECT gLbl = { 245, 200, 270, 220 };
+    DrawTextW(hdc, L"G:", -1, &gLbl, DT_LEFT | DT_SINGLELINE);
+    DrawRoundedCard(hdc, 270, 205, 190, 10, RGB_COLOR(40, 40, 48), RGB_COLOR(60, 60, 70), 4);
+    int gKnobX = 270 + (cur.g * 180) / 255;
+    DrawRoundedCard(hdc, gKnobX, 200, 10, 20, RGB_COLOR(132, 204, 22), RGB_COLOR(255, 255, 255), 3);
+
+    // Blue Slider
+    SetTextColor(hdc, RGB_COLOR(56, 189, 248));
+    RECT bLbl = { 245, 235, 270, 255 };
+    DrawTextW(hdc, L"B:", -1, &bLbl, DT_LEFT | DT_SINGLELINE);
+    DrawRoundedCard(hdc, 270, 240, 190, 10, RGB_COLOR(40, 40, 48), RGB_COLOR(60, 60, 70), 4);
+    int bKnobX = 270 + (cur.b * 180) / 255;
+    DrawRoundedCard(hdc, bKnobX, 235, 10, 20, RGB_COLOR(56, 189, 248), RGB_COLOR(255, 255, 255), 3);
+
+    // Live Color Preview Box
+    DrawColorSwatch(hdc, 475, 165, cur.ToRef());
+
+    // Apply Button
+    DrawRoundedCard(hdc, 245, 315, 290, 35, RGB_COLOR(39, 39, 45), RGB_COLOR(60, 60, 70), 6);
+    SetTextColor(hdc, RGB_COLOR(255, 255, 255));
+    RECT btnRc = { 245, 315, 535, 350 };
+    DrawTextW(hdc, L"Apply Color", -1, &btnRc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+
+    SelectObject(hdc, oldFont);
+    DeleteObject(titleFont);
+    DeleteObject(fontSmall);
+}
+
+static void DrawInteractivePreview(HDC hdc, int x, int y, int w, int h, const ESPConfig& cfg)
+{
+    DrawRoundedCard(hdc, x + 10, y + 35, w - 20, h - 85, RGB_COLOR(18, 18, 20), RGB_COLOR(39, 39, 42), 8);
+
+    int vpX = x + 10;
+    int vpY = y + 35;
+    int vpW = w - 20;
+    int vpH = h - 85;
+
+    HFONT fontName = CreateFontW(14, 0, 0, 0, 600, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+    HGDIOBJ oldFont = SelectObject(hdc, fontName);
+    SetBkMode(hdc, TRANSPARENT);
+    SetTextColor(hdc, RGB_COLOR(228, 228, 231));
+
+    if (!cfg.enable)
+    {
+        RECT offRc = { vpX, vpY + vpH / 2 - 20, vpX + vpW, vpY + vpH / 2 + 20 };
+        SetTextColor(hdc, RGB_COLOR(113, 113, 122));
+        DrawTextW(hdc, L"ESP DISABLED", -1, &offRc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        SelectObject(hdc, oldFont);
+        DeleteObject(fontName);
+        return;
+    }
+
+    HBRUSH avBrush = CreateSolidBrush(RGB_COLOR(80, 80, 90));
+    RECT avRc = { vpX + vpW / 2 - 45, vpY + 20, vpX + vpW / 2 - 32, vpY + 33 };
+    FillRect(hdc, &avRc, avBrush);
+    DeleteObject(avBrush);
+
+    RECT nameRc = { vpX + vpW / 2 - 28, vpY + 18, vpX + vpW / 2 + 65, vpY + 35 };
+    DrawTextW(hdc, L"Filorenzi", -1, &nameRc, DT_LEFT | DT_SINGLELINE | DT_VCENTER);
+
+    int boxW = 140;
+    int boxH = 200;
+    int boxX = vpX + (vpW - boxW) / 2 - 10;
+    int boxY = vpY + 45;
+
+    // Footsteps Sound Waves (Expanding Ripple Rings)
+    if (cfg.footsteps)
+    {
+        COLORREF footColor = cfg.footstepsColor.ToRef();
+        HPEN footPen = CreatePen(PS_SOLID, 2, footColor);
+        HGDIOBJ oPen = SelectObject(hdc, footPen);
+        HBRUSH nBrush = reinterpret_cast<HBRUSH>(SelectObject(hdc, GetStockObject(5)));
+        Ellipse(hdc, boxX + 10, boxY + boxH + 20, boxX + boxW - 10, boxY + boxH + 38);
+        Ellipse(hdc, boxX + 25, boxY + boxH + 24, boxX + boxW - 25, boxY + boxH + 34);
+        Ellipse(hdc, boxX + 40, boxY + boxH + 27, boxX + boxW - 40, boxY + boxH + 31);
+        SelectObject(hdc, oPen);
+        SelectObject(hdc, nBrush);
+        DeleteObject(footPen);
+    }
+
+    // Outer Glow Aura
+    if (cfg.glow)
+    {
+        COLORREF glowColor = cfg.glowColor.ToRef();
+        HPEN gPen = CreatePen(PS_SOLID, 3, glowColor);
+        HGDIOBJ oPen = SelectObject(hdc, gPen);
+        HBRUSH nBrush = reinterpret_cast<HBRUSH>(SelectObject(hdc, GetStockObject(5)));
+        RoundRect(hdc, boxX - 3, boxY - 3, boxX + boxW + 3, boxY + boxH + 3, 6, 6);
+        SelectObject(hdc, oPen);
+        SelectObject(hdc, nBrush);
+        DeleteObject(gPen);
+    }
+
+    // Dual-Color Chams Fill: Left Half = Color 1 (Occluded / Behind Wall), Right Half = Color 2 (Visible / In Sight)
+    if (cfg.chams)
+    {
+        HBRUSH occBrush = CreateSolidBrush(cfg.chamsColorOccluded.ToRef());
+        RECT occRc = { boxX + 2, boxY + 2, boxX + boxW / 2, boxY + boxH - 2 };
+        FillRect(hdc, &occRc, occBrush);
+        DeleteObject(occBrush);
+
+        HBRUSH visBrush = CreateSolidBrush(cfg.chamsColorVisible.ToRef());
+        RECT visRc = { boxX + boxW / 2, boxY + 2, boxX + boxW - 2, boxY + boxH - 2 };
+        FillRect(hdc, &visRc, visBrush);
+        DeleteObject(visBrush);
+
+        HPEN cPen = CreatePen(PS_SOLID, 1, RGB_COLOR(255, 255, 255));
+        HGDIOBJ oPen = SelectObject(hdc, cPen);
+        MoveToEx(hdc, boxX + boxW / 2, boxY + 2, nullptr);
+        LineTo(hdc, boxX + boxW / 2, boxY + boxH - 2);
+        SelectObject(hdc, oPen);
+        DeleteObject(cPen);
+    }
+
+    // Bounding Box outline
+    HPEN boxPen = CreatePen(PS_SOLID, 1, RGB_COLOR(228, 228, 231));
+    HGDIOBJ oldPen = SelectObject(hdc, boxPen);
+    HBRUSH nullBrush = reinterpret_cast<HBRUSH>(SelectObject(hdc, GetStockObject(5)));
+    Rectangle(hdc, boxX, boxY, boxX + boxW, boxY + boxH);
+
+    // Health Bar & 50
+    HPEN hpPen = CreatePen(PS_SOLID, 2, RGB_COLOR(234, 179, 8));
+    SelectObject(hdc, hpPen);
+    MoveToEx(hdc, boxX - 6, boxY + boxH / 2, nullptr);
+    LineTo(hdc, boxX - 6, boxY + boxH);
+    DeleteObject(hpPen);
+
+    HFONT fontSmall = CreateFontW(12, 0, 0, 0, 400, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+    SelectObject(hdc, fontSmall);
+    SetTextColor(hdc, RGB_COLOR(161, 161, 170));
+    RECT hpTextRc = { boxX - 30, boxY + boxH / 2 - 6, boxX - 10, boxY + boxH / 2 + 10 };
+    DrawTextW(hdc, L"50", -1, &hpTextRc, DT_RIGHT | DT_SINGLELINE);
+
+    // Skeleton
+    if (cfg.skeleton)
+    {
+        COLORREF skelColor = cfg.skeletonColor.ToRef();
+        HPEN skelPen = CreatePen(PS_SOLID, 2, skelColor);
+        SelectObject(hdc, skelPen);
+        Ellipse(hdc, boxX + boxW / 2 - 8, boxY + 15, boxX + boxW / 2 + 8, boxY + 31);
+        MoveToEx(hdc, boxX + boxW / 2, boxY + 31, nullptr);
+        LineTo(hdc, boxX + boxW / 2, boxY + 110);
+        MoveToEx(hdc, boxX + boxW / 2 - 35, boxY + 55, nullptr);
+        LineTo(hdc, boxX + boxW / 2 + 35, boxY + 55);
+        MoveToEx(hdc, boxX + boxW / 2, boxY + 110, nullptr);
+        LineTo(hdc, boxX + boxW / 2 - 25, boxY + 180);
+        MoveToEx(hdc, boxX + boxW / 2, boxY + 110, nullptr);
+        LineTo(hdc, boxX + boxW / 2 + 25, boxY + 180);
+        DeleteObject(skelPen);
+    }
+
+    // History Skeleton Ghost
+    if (cfg.historySkeleton)
+    {
+        COLORREF histColor = cfg.historySkeletonColor.ToRef();
+        HPEN histPen = CreatePen(PS_SOLID, 1, histColor);
+        HGDIOBJ oPen = SelectObject(hdc, histPen);
+        int gX = boxX + 14;
+        Ellipse(hdc, gX + boxW / 2 - 8, boxY + 20, gX + boxW / 2 + 8, boxY + 36);
+        MoveToEx(hdc, gX + boxW / 2, boxY + 36, nullptr); LineTo(hdc, gX + boxW / 2, boxY + 115);
+        MoveToEx(hdc, gX + boxW / 2 - 35, boxY + 60, nullptr); LineTo(hdc, gX + boxW / 2 + 35, boxY + 60);
+        MoveToEx(hdc, gX + boxW / 2, boxY + 115, nullptr); LineTo(hdc, gX + boxW / 2 - 25, boxY + 185);
+        MoveToEx(hdc, gX + boxW / 2, boxY + 115, nullptr); LineTo(hdc, gX + boxW / 2 + 25, boxY + 185);
+        SelectObject(hdc, oPen);
+        DeleteObject(histPen);
+    }
+
+    // Aim History Skeleton Ghost
+    if (cfg.aimHistorySkeleton)
+    {
+        COLORREF aimColor = cfg.aimHistorySkeletonColor.ToRef();
+        HPEN aimPen = CreatePen(PS_SOLID, 1, aimColor);
+        HGDIOBJ oPen = SelectObject(hdc, aimPen);
+        int gX = boxX - 14;
+        Ellipse(hdc, gX + boxW / 2 - 8, boxY + 10, gX + boxW / 2 + 8, boxY + 26);
+        MoveToEx(hdc, gX + boxW / 2, boxY + 26, nullptr); LineTo(hdc, gX + boxW / 2, boxY + 105);
+        MoveToEx(hdc, gX + boxW / 2 - 35, boxY + 50, nullptr); LineTo(hdc, gX + boxW / 2 + 35, boxY + 50);
+        MoveToEx(hdc, gX + boxW / 2, boxY + 105, nullptr); LineTo(hdc, gX + boxW / 2 - 25, boxY + 175);
+        MoveToEx(hdc, gX + boxW / 2, boxY + 105, nullptr); LineTo(hdc, gX + boxW / 2 + 25, boxY + 175);
+        SelectObject(hdc, oPen);
+        DeleteObject(aimPen);
+    }
+
+    // Off-screen arrows
+    if (cfg.offScreen)
+    {
+        COLORREF offColor = cfg.offScreenColor.ToRef();
+        HPEN offPen = CreatePen(PS_SOLID, 2, offColor);
+        HBRUSH offBrush = CreateSolidBrush(offColor);
+        SelectObject(hdc, offPen);
+        SelectObject(hdc, offBrush);
+        POINT arrow1[3] = { { vpX + 18, vpY + vpH / 2 }, { vpX + 30, vpY + vpH / 2 - 8 }, { vpX + 30, vpY + vpH / 2 + 8 } };
+        Polygon(hdc, arrow1, 3);
+        POINT arrow2[3] = { { vpX + vpW - 18, vpY + vpH / 2 }, { vpX + vpW - 30, vpY + vpH / 2 - 8 }, { vpX + vpW - 30, vpY + vpH / 2 + 8 } };
+        Polygon(hdc, arrow2, 3);
+        DeleteObject(offPen);
+        DeleteObject(offBrush);
+    }
+
+    const wchar_t* flags[] = { L"HK", L"Zoom", L"Blind", L"Reload", L"C4", L"VIP", L"Defuse", L"Pin" };
+    bool flagActive[] = { cfg.flagHK, cfg.flagZoom, cfg.flagBlind, cfg.flagReload, cfg.flagC4, cfg.flagVIP, cfg.flagDefuse, cfg.flagPin };
+    int flagY = boxY + 5;
+    for (int i = 0; i < 8; ++i)
+    {
+        if (flagActive[i])
+        {
+            RECT flagRc = { boxX + boxW + 8, flagY, boxX + boxW + 80, flagY + 16 };
+            DrawTextW(hdc, flags[i], -1, &flagRc, DT_LEFT | DT_SINGLELINE);
+            flagY += 18;
+        }
+    }
+
+    RECT wpnRc = { boxX, boxY + boxH + 8, boxX + boxW, boxY + boxH + 24 };
+    DrawTextW(hdc, L"AK-47", -1, &wpnRc, DT_CENTER | DT_SINGLELINE);
+
+    SelectObject(hdc, oldFont);
+    DeleteObject(fontName);
+    DeleteObject(fontSmall);
+
+    HPEN divPen = CreatePen(PS_SOLID, 1, RGB_COLOR(39, 39, 42));
+    SelectObject(hdc, divPen);
+    MoveToEx(hdc, x + 20, y + h - 55, nullptr);
+    LineTo(hdc, x + w - 20, y + h - 55);
+    DeleteObject(divPen);
+
+    DrawRoundedCard(hdc, x + 20, y + h - 45, w - 40, 36, cfg.showManageModal ? RGB_COLOR(39, 39, 42) : RGB_COLOR(24, 24, 27), RGB_COLOR(45, 45, 50), 6);
+    HFONT fontBtn = CreateFontW(14, 0, 0, 0, 500, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+    SelectObject(hdc, fontBtn);
+    SetTextColor(hdc, RGB_COLOR(228, 228, 231));
+    RECT btnRc = { x + 20, y + h - 45, x + w - 20, y + h - 9 };
+    DrawTextW(hdc, L"Manage elements", -1, &btnRc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    SelectObject(hdc, oldFont);
+    DeleteObject(fontBtn);
+}
+
 static LRESULT CALLBACK MenuWindowProc(HWND wnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
-    if (msg == WM_POTATO_STATUS)
+    if (msg == WM_ERASEBKGND)
     {
-        ShowSkyboxResult(static_cast<int>(static_cast<LONG_PTR>(wParam)),
-            lParam);
+        return 1;
+    }
+    if (msg == WM_PAINT)
+    {
+        PAINTSTRUCT ps{};
+        HDC hdc = BeginPaint(wnd, &ps);
+        RECT rc{};
+        GetClientRect(wnd, &rc);
+        int w = rc.right - rc.left;
+        int h = rc.bottom - rc.top;
+
+        HDC memDC = CreateCompatibleDC(hdc);
+        HBITMAP memBmp = CreateCompatibleBitmap(hdc, w, h);
+        HGDIOBJ oldBmp = SelectObject(memDC, memBmp);
+
+        // Window background `#161618`
+        HBRUSH bgBrush = CreateSolidBrush(RGB_COLOR(22, 22, 24));
+        FillRect(memDC, &rc, bgBrush);
+        DeleteObject(bgBrush);
+
+        // Header / Tab bar
+        const wchar_t* tabs[] = { L"Ragebot", L"Anti-Aim", L"Visuals", L"Misc", L"Configs" };
+        HFONT tabFont = CreateFontW(14, 0, 0, 0, 500, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+        HGDIOBJ oldFont = SelectObject(memDC, tabFont);
+        SetBkMode(memDC, TRANSPARENT);
+
+        for (int i = 0; i < 5; ++i)
+        {
+            bool active = (g_espConfig.selectedTab == i);
+            COLORREF tabBg = active ? RGB_COLOR(39, 39, 42) : RGB_COLOR(24, 24, 27);
+            DrawRoundedCard(memDC, 20 + i * 92, 12, 84, 28, tabBg, RGB_COLOR(45, 45, 50), 6);
+            SetTextColor(memDC, active ? RGB_COLOR(255, 255, 255) : RGB_COLOR(161, 161, 170));
+            RECT tabRc = { 20 + i * 92, 12, 20 + i * 92 + 84, 40 };
+            DrawTextW(memDC, tabs[i], -1, &tabRc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        }
+
+        // Left Card: "ESP"
+        DrawRoundedCard(memDC, 20, 50, 360, 430, RGB_COLOR(24, 24, 27), RGB_COLOR(39, 39, 42), 8);
+        SetTextColor(memDC, RGB_COLOR(161, 161, 170));
+        RECT espTitleRc = { 35, 62, 200, 80 };
+        DrawTextW(memDC, L"ESP", -1, &espTitleRc, DT_LEFT | DT_SINGLELINE);
+
+        const wchar_t* rows[] = {
+            L"Enable",
+            L"Skeleton",
+            L"History skeleton",
+            L"Aim history skeleton",
+            L"Footsteps",
+            L"Glow",
+            L"Chams",
+            L"Off screen"
+        };
+        bool rowActive[] = {
+            g_espConfig.enable,
+            g_espConfig.skeleton,
+            g_espConfig.historySkeleton,
+            g_espConfig.aimHistorySkeleton,
+            g_espConfig.footsteps,
+            g_espConfig.glow,
+            g_espConfig.chams,
+            g_espConfig.offScreen
+        };
+
+        HFONT rowFont = CreateFontW(14, 0, 0, 0, 400, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+        SelectObject(memDC, rowFont);
+
+        int rowY = 90;
+        HPEN divPen = CreatePen(PS_SOLID, 1, RGB_COLOR(32, 32, 35));
+        for (int i = 0; i < 8; ++i)
+        {
+            if (i > 0)
+            {
+                SelectObject(memDC, divPen);
+                MoveToEx(memDC, 35, rowY, nullptr);
+                LineTo(memDC, 365, rowY);
+            }
+
+            SetTextColor(memDC, RGB_COLOR(228, 228, 231));
+            RECT rRc = { 35, rowY + 12, 220, rowY + 34 };
+            DrawTextW(memDC, rows[i], -1, &rRc, DT_LEFT | DT_SINGLELINE);
+
+            // Toggle switch on the right
+            DrawToggleSwitch(memDC, 325, rowY + 12, rowActive[i]);
+
+            // Color swatches & gear icons
+            if (i == 1) // Skeleton
+            {
+                DrawColorSwatch(memDC, 298, rowY + 13, g_espConfig.skeletonColor.ToRef());
+            }
+            else if (i == 2) // History skeleton
+            {
+                DrawGearIcon(memDC, 272, rowY + 13);
+                DrawColorSwatch(memDC, 298, rowY + 13, g_espConfig.historySkeletonColor.ToRef());
+            }
+            else if (i == 3) // Aim history skeleton
+            {
+                DrawGearIcon(memDC, 272, rowY + 13);
+                DrawColorSwatch(memDC, 298, rowY + 13, g_espConfig.aimHistorySkeletonColor.ToRef());
+            }
+            else if (i == 4) // Footsteps
+            {
+                DrawColorSwatch(memDC, 298, rowY + 13, g_espConfig.footstepsColor.ToRef());
+            }
+            else if (i == 5) // Glow
+            {
+                DrawColorSwatch(memDC, 298, rowY + 13, g_espConfig.glowColor.ToRef());
+            }
+            else if (i == 6) // Chams
+            {
+                DrawGearIcon(memDC, 246, rowY + 13);
+                DrawColorSwatch(memDC, 272, rowY + 13, g_espConfig.chamsColorOccluded.ToRef());
+                DrawColorSwatch(memDC, 298, rowY + 13, g_espConfig.chamsColorVisible.ToRef());
+            }
+            else if (i == 7) // Off screen
+            {
+                DrawGearIcon(memDC, 272, rowY + 13);
+                DrawColorSwatch(memDC, 298, rowY + 13, g_espConfig.offScreenColor.ToRef());
+            }
+
+            rowY += 46;
+        }
+        DeleteObject(divPen);
+
+        // Right Card: "INTERACTIVE PREVIEW"
+        DrawRoundedCard(memDC, 390, 50, 365, 430, RGB_COLOR(24, 24, 27), RGB_COLOR(39, 39, 42), 8);
+        SelectObject(memDC, tabFont);
+        SetTextColor(memDC, RGB_COLOR(161, 161, 170));
+        RECT prevTitleRc = { 405, 62, 600, 80 };
+        DrawTextW(memDC, L"INTERACTIVE PREVIEW", -1, &prevTitleRc, DT_LEFT | DT_SINGLELINE);
+
+        DrawInteractivePreview(memDC, 390, 50, 365, 430, g_espConfig);
+
+        // Render Manage Elements Modal Dialog if open
+        if (g_espConfig.showManageModal)
+        {
+            DrawRoundedCard(memDC, 420, 120, 305, 300, RGB_COLOR(30, 30, 35), RGB_COLOR(60, 60, 70), 8);
+            SetTextColor(memDC, RGB_COLOR(255, 255, 255));
+            RECT mTitle = { 435, 135, 700, 155 };
+            DrawTextW(memDC, L"Manage Elements (Flags)", -1, &mTitle, DT_LEFT | DT_SINGLELINE);
+
+            const wchar_t* mFlags[] = { L"HK (Headshot)", L"Zoom (Scoped)", L"Blind (Flashed)", L"Reloading", L"C4 Carrier", L"VIP Status", L"Defuse", L"Pin Pulled" };
+            bool* mActive[] = { &g_espConfig.flagHK, &g_espConfig.flagZoom, &g_espConfig.flagBlind, &g_espConfig.flagReload, &g_espConfig.flagC4, &g_espConfig.flagVIP, &g_espConfig.flagDefuse, &g_espConfig.flagPin };
+
+            SelectObject(memDC, rowFont);
+            for (int k = 0; k < 8; ++k)
+            {
+                int fy = 165 + k * 28;
+                DrawToggleSwitch(memDC, 435, fy, *mActive[k]);
+                RECT fTextRc = { 482, fy, 710, fy + 20 };
+                DrawTextW(memDC, mFlags[k], -1, &fTextRc, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+            }
+        }
+
+        // Render RGB Color Picker Modal if open
+        DrawRgbColorPickerModal(memDC, g_espConfig);
+
+        SelectObject(memDC, oldFont);
+        DeleteObject(tabFont);
+        DeleteObject(rowFont);
+
+        BitBlt(hdc, 0, 0, w, h, memDC, 0, 0, 0x00CC0020 /* SRCCOPY */);
+        SelectObject(memDC, oldBmp);
+        DeleteObject(memBmp);
+        DeleteDC(memDC);
+        EndPaint(wnd, &ps);
         return 0;
     }
-    if (msg == WM_CAS_BOT_STATUS)
+    if (msg == WM_MOUSEMOVE && (wParam & 0x0001 /* MK_LBUTTON */))
     {
-        const int result = static_cast<int>(static_cast<LONG_PTR>(wParam));
-        if (result < 0 && g_botHighlightCheck)
-            SendMessageW(g_botHighlightCheck, BM_SETCHECK,
-                BST_UNCHECKED, 0);
-        ShowBotHighlightResult(result, lParam);
-        return 0;
+        if (g_espConfig.showRgbPickerModal && g_espConfig.targetRgbColor)
+        {
+            int mouseX = static_cast<int>(lParam & 0xFFFF);
+            int mouseY = static_cast<int>((lParam >> 16) & 0xFFFF);
+            RGBVal& cur = *g_espConfig.targetRgbColor;
+
+            // R slider drag (x: 270..460, y: 160..190)
+            if (mouseY >= 160 && mouseY <= 190 && mouseX >= 270 && mouseX <= 460)
+            {
+                cur.r = static_cast<BYTE>(((mouseX - 270) * 255) / 190);
+                InvalidateRect(wnd, nullptr, FALSE);
+                return 0;
+            }
+            // G slider drag (x: 270..460, y: 195..225)
+            if (mouseY >= 195 && mouseY <= 225 && mouseX >= 270 && mouseX <= 460)
+            {
+                cur.g = static_cast<BYTE>(((mouseX - 270) * 255) / 190);
+                InvalidateRect(wnd, nullptr, FALSE);
+                return 0;
+            }
+            // B slider drag (x: 270..460, y: 230..260)
+            if (mouseY >= 230 && mouseY <= 260 && mouseX >= 270 && mouseX <= 460)
+            {
+                cur.b = static_cast<BYTE>(((mouseX - 270) * 255) / 190);
+                InvalidateRect(wnd, nullptr, FALSE);
+                return 0;
+            }
+        }
     }
-    if (msg == WM_COMMAND)
+    if (msg == WM_LBUTTONDOWN)
     {
-        const int id = static_cast<int>(wParam & 0xFFFFu);
-        const int notification = static_cast<int>((wParam >> 16) & 0xFFFFu);
-        if (notification == BN_CLICKED && id == IDC_APPLY_SKYBOX)
+        int mouseX = static_cast<int>(lParam & 0xFFFF);
+        int mouseY = static_cast<int>((lParam >> 16) & 0xFFFF);
+
+        // RGB Color Picker Modal click handling
+        if (g_espConfig.showRgbPickerModal && g_espConfig.targetRgbColor)
         {
-            QueueSelectedSkybox();
+            RGBVal& cur = *g_espConfig.targetRgbColor;
+
+            // R slider click
+            if (mouseY >= 160 && mouseY <= 190 && mouseX >= 270 && mouseX <= 460)
+            {
+                cur.r = static_cast<BYTE>(((mouseX - 270) * 255) / 190);
+                InvalidateRect(wnd, nullptr, FALSE);
+                return 0;
+            }
+            // G slider click
+            if (mouseY >= 195 && mouseY <= 225 && mouseX >= 270 && mouseX <= 460)
+            {
+                cur.g = static_cast<BYTE>(((mouseX - 270) * 255) / 190);
+                InvalidateRect(wnd, nullptr, FALSE);
+                return 0;
+            }
+            // B slider click
+            if (mouseY >= 230 && mouseY <= 260 && mouseX >= 270 && mouseX <= 460)
+            {
+                cur.b = static_cast<BYTE>(((mouseX - 270) * 255) / 190);
+                InvalidateRect(wnd, nullptr, FALSE);
+                return 0;
+            }
+            // Apply button / Close modal
+            if ((mouseX >= 245 && mouseX <= 535 && mouseY >= 315 && mouseY <= 350) ||
+                mouseX < 230 || mouseX > 550 || mouseY < 120 || mouseY > 370)
+            {
+                g_espConfig.showRgbPickerModal = false;
+                InvalidateRect(wnd, nullptr, FALSE);
+                return 0;
+            }
+        }
+
+        // Check Tab bar clicks
+        if (mouseY >= 12 && mouseY <= 40)
+        {
+            for (int i = 0; i < 5; ++i)
+            {
+                if (mouseX >= 20 + i * 92 && mouseX <= 20 + i * 92 + 84)
+                {
+                    g_espConfig.selectedTab = i;
+                    InvalidateRect(wnd, nullptr, FALSE);
+                    return 0;
+                }
+            }
+        }
+
+        // Manage modal click check
+        if (g_espConfig.showManageModal)
+        {
+            if (mouseX >= 435 && mouseX <= 475)
+            {
+                bool* mActive[] = { &g_espConfig.flagHK, &g_espConfig.flagZoom, &g_espConfig.flagBlind, &g_espConfig.flagReload, &g_espConfig.flagC4, &g_espConfig.flagVIP, &g_espConfig.flagDefuse, &g_espConfig.flagPin };
+                for (int k = 0; k < 8; ++k)
+                {
+                    int fy = 165 + k * 28;
+                    if (mouseY >= fy && mouseY <= fy + 20)
+                    {
+                        *mActive[k] = !*mActive[k];
+                        InvalidateRect(wnd, nullptr, FALSE);
+                        return 0;
+                    }
+                }
+            }
+            if (mouseX < 420 || mouseX > 725 || mouseY < 120 || mouseY > 420)
+            {
+                g_espConfig.showManageModal = false;
+                InvalidateRect(wnd, nullptr, FALSE);
+                return 0;
+            }
+        }
+
+        // Manage elements button click
+        if (mouseX >= 410 && mouseX <= 735 && mouseY >= 435 && mouseY <= 471)
+        {
+            g_espConfig.showManageModal = !g_espConfig.showManageModal;
+            InvalidateRect(wnd, nullptr, FALSE);
             return 0;
         }
-        if (notification == BN_CLICKED && id == IDC_RESTORE_SKYBOX)
+
+        // Left Card clicks (ESP rows)
+        int rowY = 90;
+        for (int i = 0; i < 8; ++i)
         {
-            QueueRestoreSkybox();
-            return 0;
-        }
-        if (notification == BN_CLICKED && id == IDC_BOT_HIGHLIGHT)
-        {
-            const bool enabled = g_botHighlightCheck &&
-                SendMessageW(g_botHighlightCheck, BM_GETCHECK, 0, 0) ==
-                    BST_CHECKED;
-            QueueBotHighlight(enabled);
-            return 0;
+            if (mouseY >= rowY + 5 && mouseY <= rowY + 41)
+            {
+                // Toggle switch click (x: 320..365)
+                if (mouseX >= 320 && mouseX <= 365)
+                {
+                    if (i == 0) g_espConfig.enable = !g_espConfig.enable;
+                    else if (i == 1) g_espConfig.skeleton = !g_espConfig.skeleton;
+                    else if (i == 2) g_espConfig.historySkeleton = !g_espConfig.historySkeleton;
+                    else if (i == 3) g_espConfig.aimHistorySkeleton = !g_espConfig.aimHistorySkeleton;
+                    else if (i == 4) g_espConfig.footsteps = !g_espConfig.footsteps;
+                    else if (i == 5) g_espConfig.glow = !g_espConfig.glow;
+                    else if (i == 6) g_espConfig.chams = !g_espConfig.chams;
+                    else if (i == 7) g_espConfig.offScreen = !g_espConfig.offScreen;
+
+                    g_botHighlightEnabled = g_espConfig.enable;
+                    QueueBotHighlight(g_espConfig.enable);
+                    InvalidateRect(wnd, nullptr, FALSE);
+                    return 0;
+                }
+
+                // Swatches click -> Opens RGB Color Picker Modal!
+                if (i == 1 && mouseX >= 295 && mouseX <= 318) // Skeleton Color
+                {
+                    g_espConfig.targetRgbColor = &g_espConfig.skeletonColor;
+                    g_espConfig.targetRgbTitle = L"Skeleton RGB Color";
+                    g_espConfig.showRgbPickerModal = true;
+                    InvalidateRect(wnd, nullptr, FALSE);
+                    return 0;
+                }
+                if (i == 2 && mouseX >= 295 && mouseX <= 318) // History Skeleton Color
+                {
+                    g_espConfig.targetRgbColor = &g_espConfig.historySkeletonColor;
+                    g_espConfig.targetRgbTitle = L"History Skeleton RGB Color";
+                    g_espConfig.showRgbPickerModal = true;
+                    InvalidateRect(wnd, nullptr, FALSE);
+                    return 0;
+                }
+                if (i == 3 && mouseX >= 295 && mouseX <= 318) // Aim History Skeleton Color
+                {
+                    g_espConfig.targetRgbColor = &g_espConfig.aimHistorySkeletonColor;
+                    g_espConfig.targetRgbTitle = L"Aim History Skeleton RGB Color";
+                    g_espConfig.showRgbPickerModal = true;
+                    InvalidateRect(wnd, nullptr, FALSE);
+                    return 0;
+                }
+                if (i == 4 && mouseX >= 295 && mouseX <= 318) // Footsteps Color
+                {
+                    g_espConfig.targetRgbColor = &g_espConfig.footstepsColor;
+                    g_espConfig.targetRgbTitle = L"Footsteps Wave RGB Color";
+                    g_espConfig.showRgbPickerModal = true;
+                    InvalidateRect(wnd, nullptr, FALSE);
+                    return 0;
+                }
+                if (i == 5 && mouseX >= 295 && mouseX <= 318) // Glow Color
+                {
+                    g_espConfig.targetRgbColor = &g_espConfig.glowColor;
+                    g_espConfig.targetRgbTitle = L"Glow Aura RGB Color";
+                    g_espConfig.showRgbPickerModal = true;
+                    InvalidateRect(wnd, nullptr, FALSE);
+                    return 0;
+                }
+                if (i == 6) // Chams Dual Colors
+                {
+                    if (mouseX >= 268 && mouseX <= 290) // Color 1: Occluded (Behind Wall)
+                    {
+                        g_espConfig.targetRgbColor = &g_espConfig.chamsColorOccluded;
+                        g_espConfig.targetRgbTitle = L"Chams Color 1 (Behind Wall / Occluded)";
+                        g_espConfig.showRgbPickerModal = true;
+                        InvalidateRect(wnd, nullptr, FALSE);
+                        return 0;
+                    }
+                    if (mouseX >= 295 && mouseX <= 318) // Color 2: Visible (In Sight)
+                    {
+                        g_espConfig.targetRgbColor = &g_espConfig.chamsColorVisible;
+                        g_espConfig.targetRgbTitle = L"Chams Color 2 (Visible / In Line of Sight)";
+                        g_espConfig.showRgbPickerModal = true;
+                        InvalidateRect(wnd, nullptr, FALSE);
+                        return 0;
+                    }
+                }
+                if (i == 7 && mouseX >= 295 && mouseX <= 318) // Off Screen Color
+                {
+                    g_espConfig.targetRgbColor = &g_espConfig.offScreenColor;
+                    g_espConfig.targetRgbTitle = L"Off Screen Arrow RGB Color";
+                    g_espConfig.showRgbPickerModal = true;
+                    InvalidateRect(wnd, nullptr, FALSE);
+                    return 0;
+                }
+            }
+            rowY += 46;
         }
     }
     if (msg == WM_CLOSE)
@@ -2585,76 +3414,10 @@ static HWND CreateMenuWindow(HINSTANCE instance, HWND owner)
     wc.lpszClassName = kClassName;
     RegisterClassExW(&wc);
 
-    constexpr int kWidth = 540;
-    constexpr int kHeight = 420;
-    HWND wnd = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE, kClassName, L"CAS v2.3 - CS2 Visuals & Skybox",
+    constexpr int kWidth = 780;
+    constexpr int kHeight = 500;
+    HWND wnd = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE, kClassName, L"CAS v2.3 - ESP Settings & Interactive Preview",
         WS_POPUP | WS_BORDER, 0, 0, kWidth, kHeight, owner, nullptr, instance, nullptr);
-    if (!wnd)
-        return nullptr;
-
-    // Header
-    CreateWindowExW(0, L"STATIC", L"CAS v2.3 | Nixware Interface Replica (Injected DLL)", WS_CHILD | WS_VISIBLE | SS_CENTER,
-        15, 12, 510, 22, wnd, nullptr, instance, nullptr);
-
-    // Navigation Tabs (CLICKABLE)
-    CreateWindowExW(0, L"BUTTON", L"Ragebot", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-        15, 40, 96, 28, wnd, reinterpret_cast<HMENU>(static_cast<ULONG_PTR>(IDC_TAB_RAGEBOT)), instance, nullptr);
-    CreateWindowExW(0, L"BUTTON", L"Anti-Aim", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-        118, 40, 96, 28, wnd, reinterpret_cast<HMENU>(static_cast<ULONG_PTR>(IDC_TAB_ANTIAIM)), instance, nullptr);
-    CreateWindowExW(0, L"BUTTON", L"Visuals", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-        221, 40, 96, 28, wnd, reinterpret_cast<HMENU>(static_cast<ULONG_PTR>(IDC_TAB_VISUALS)), instance, nullptr);
-    CreateWindowExW(0, L"BUTTON", L"Misc", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-        324, 40, 96, 28, wnd, reinterpret_cast<HMENU>(static_cast<ULONG_PTR>(IDC_TAB_MISC)), instance, nullptr);
-    CreateWindowExW(0, L"BUTTON", L"Configs", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-        427, 40, 96, 28, wnd, reinterpret_cast<HMENU>(static_cast<ULONG_PTR>(IDC_TAB_CONFIGS)), instance, nullptr);
-
-    // Section 1: World Customization
-    CreateWindowExW(0, L"BUTTON", L"World Customization", WS_CHILD | WS_VISIBLE | BS_GROUPBOX,
-        15, 78, 510, 145, wnd, nullptr, instance, nullptr);
-    CreateWindowExW(0, L"STATIC", L"Skybox Preset:", WS_CHILD | WS_VISIBLE,
-        30, 102, 100, 22, wnd, nullptr, instance, nullptr);
-    g_skyboxCombo = CreateWindowExW(0, L"COMBOBOX", L"", WS_CHILD | WS_VISIBLE | WS_VSCROLL | CBS_DROPDOWNLIST,
-        135, 98, 370, 200, wnd, reinterpret_cast<HMENU>(static_cast<ULONG_PTR>(IDC_SKYBOX_COMBO)), instance, nullptr);
-    if (g_skyboxCombo)
-    {
-        for (unsigned int i = 0; i < sizeof(kSkyboxes) / sizeof(kSkyboxes[0]); ++i)
-            SendMessageW(g_skyboxCombo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(kSkyboxes[i].name));
-        SendMessageW(g_skyboxCombo, CB_SETCURSEL, 0, 0);
-    }
-    CreateWindowExW(0, L"BUTTON", L"Apply Skybox", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-        135, 132, 175, 32, wnd, reinterpret_cast<HMENU>(static_cast<ULONG_PTR>(IDC_APPLY_SKYBOX)), instance, nullptr);
-    CreateWindowExW(0, L"BUTTON", L"Restore Skybox", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-        330, 132, 175, 32, wnd, reinterpret_cast<HMENU>(static_cast<ULONG_PTR>(IDC_RESTORE_SKYBOX)), instance, nullptr);
-    g_skyboxStatusLabel = CreateWindowExW(0, L"STATIC",
-        L"Sky: ready. Load a map, then choose a preset.",
-        WS_CHILD | WS_VISIBLE | SS_CENTER | SS_CENTERIMAGE,
-        30, 172, 475, 40, wnd, nullptr, instance, nullptr);
-
-    // Section 2: Enemy Highlighting & Features
-    CreateWindowExW(0, L"BUTTON", L"Enemy Highlighting & Penetration", WS_CHILD | WS_VISIBLE | BS_GROUPBOX,
-        15, 230, 510, 145, wnd, nullptr, instance, nullptr);
-    g_botHighlightCheck = CreateWindowExW(0, L"BUTTON",
-        L"Highlight enemy players (glow + red tint)",
-        WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
-        30, 254, 475, 26, wnd,
-        reinterpret_cast<HMENU>(static_cast<ULONG_PTR>(IDC_BOT_HIGHLIGHT)),
-        instance, nullptr);
-    g_botStatusLabel = CreateWindowExW(0, L"STATIC",
-        L"Enemies: disabled.",
-        WS_CHILD | WS_VISIBLE | SS_CENTER | SS_CENTERIMAGE,
-        30, 284, 475, 45, wnd, nullptr, instance, nullptr);
-
-    // Decorative Read-Only Checkboxes (Disabled)
-    CreateWindowExW(0, L"BUTTON", L"Highlight penetrable surfaces", WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX | WS_DISABLED,
-        30, 335, 230, 24, wnd, nullptr, instance, nullptr);
-    CreateWindowExW(0, L"BUTTON", L"Show penetration damage", WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX | WS_DISABLED,
-        270, 335, 230, 24, wnd, nullptr, instance, nullptr);
-
-    // Footer
-    CreateWindowExW(0, L"STATIC",
-        L"Press Insert to toggle menu overlay",
-        WS_CHILD | WS_VISIBLE | SS_CENTER,
-        15, 386, 510, 20, wnd, nullptr, instance, nullptr);
     return wnd;
 }
 
@@ -2668,8 +3431,8 @@ static bool PositionMenuOverGame()
     POINT origin{};
     if (!ClientToScreen(g_gameWindow, &origin))
         return false;
-    constexpr int kWidth = 540;
-    constexpr int kHeight = 420;
+    constexpr int kWidth = 780;
+    constexpr int kHeight = 500;
     const int width = static_cast<int>(client.right - client.left);
     const int height = static_cast<int>(client.bottom - client.top);
     const int x = origin.x + ((width > kWidth) ? (width - kWidth) / 2 : 0);
