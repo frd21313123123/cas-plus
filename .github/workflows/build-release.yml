@@ -175,5 +175,4 @@ jobs:
             --repo "${{ github.repository }}" `
             --target "${{ github.sha }}" `
             --title "cas+ $tag" `
-            --notes "Automated build of DLL and Injector from commit ${{ github.sha }}" `
-            --clobber
+            --notes "Automated build of DLL and Injector from commit ${{ github.sha }}"
