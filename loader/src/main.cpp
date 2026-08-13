@@ -73,14 +73,14 @@ void printBanner()
 {
     std::cout << colors::cyan << colors::bold << R"(
   ================================================================
-     ____   ___ _____ _  _____ ___    _     ___   _    ____  _____ ____  
-    |  _ \ / _ \_   _/ \|_   _/ _ \  | |   / _ \ / \  |  _ \| ____|  _ \ 
-    | |_) | | | || |/ _ \ | || | | | | |  | | | / _ \ | | | |  _| | |_) |
-    |  __/| |_| || / ___ \| || |_| | | |__| |_|/ ___ \| |_| | |___|  _ < 
-    |_|    \___/ |_/_/   \_\_| \___/  |_____\___/_/   \_\____/|_____|_| \_\
+     ____    _    ____    ____  _     _   _ ____  
+    / ___|  / \  / ___|  |  _ \| |   | | | / ___| 
+   | |     / _ \ \___ \  | |_) | |   | | | \___ \ 
+   | |___ / ___ \ ___) | |  __/| |___| |_| |___) |
+    \____/_/   \_\____/  |_|   |_____|\___/|____/ 
   ================================================================
 )" << colors::reset;
-    std::cout << colors::gray << "   Counter-Strike 2 Auto-Launcher & Payload Injector\n"
+    std::cout << colors::gray << "   CAS PLUS - Counter-Strike 2 Auto-Launcher & Injector\n"
               << "   Flags: " << colors::yellow << "-dx11 -insecure -allow_third_party_software -novid -nojoy\n" << colors::reset << "\n";
 }
 
@@ -226,7 +226,7 @@ bool readFileBytes(const fs::path& filePath, std::vector<BYTE>& buffer)
 
 int main(int argc, char* argv[])
 {
-    SetConsoleTitleW(L"CAS+ / PotatoLoader - CS2 Auto-Launcher & Injector");
+    SetConsoleTitleW(L"CAS PLUS - CS2 Auto-Launcher & Injector");
     enableAnsiColors();
     enableDebugPrivilege();
     printBanner();
