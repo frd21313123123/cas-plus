@@ -305,8 +305,13 @@ struct ESPConfig {
     RGBVal glowColor = { 37, 99, 235 };
 
     bool chams = true;
-    RGBVal chamsColorOccluded = { 239, 68, 68 }; // Color 1: Red (Behind Wall)
-    RGBVal chamsColorVisible = { 132, 204, 22 };  // Color 2: Lime Green (In Sight)
+    RGBVal chamsColorOccluded = { 239, 68, 68 }; // Color 1: Red (Behind Wall / Occluded)
+    RGBVal chamsColorVisible = { 132, 204, 22 };  // Color 2: Lime Green (In Line of Sight)
+    int chamsStyle = 0; // 0: Flat Solid, 1: Textured, 2: Wireframe, 3: Glow/Glass Chams
+    bool chamsEnemies = true;
+    bool chamsHands = false;
+    bool chamsWeapons = false;
+    bool showChamsModal = false;
 
     bool offScreen = true;
     RGBVal offScreenColor = { 56, 189, 248 };
@@ -1996,9 +2001,14 @@ static bool ApplyBotHighlight(const BotHighlightRuntime& runtime,
     // Dual-color Chams: Color 1 (Occluded / Behind Wall) vs Color 2 (Visible / In Sight)
     const RGBVal activeChams = isOccluded ? g_espConfig.chamsColorOccluded : g_espConfig.chamsColorVisible;
     const BYTE highlightColor[4] = { activeChams.r, activeChams.g, activeChams.b, 255 };
-    const BYTE glowHighlightColor[4] = { g_espConfig.glowColor.r, g_espConfig.glowColor.g, g_espConfig.glowColor.b, 255 };
+    const BYTE glowHighlightColor[4] = {
+        (g_espConfig.chams || !g_espConfig.glow) ? activeChams.r : g_espConfig.glowColor.r,
+        (g_espConfig.chams || !g_espConfig.glow) ? activeChams.g : g_espConfig.glowColor.g,
+        (g_espConfig.chams || !g_espConfig.glow) ? activeChams.b : g_espConfig.glowColor.b,
+        255
+    };
 
-    // Apply Chams
+    // Apply Chams model color
     if (g_espConfig.chams)
     {
         CopyFourBytes(renderColor, highlightColor);
@@ -2007,13 +2017,13 @@ static bool ApplyBotHighlight(const BotHighlightRuntime& runtime,
         runtime.setRenderColor(pawn, highlightColor[0], highlightColor[1], highlightColor[2]);
     }
 
-    // Apply Engine Glow (Type 3 = visible through walls)
+    // Apply Engine Glow & Wall-penetrating Stencil Pass (Type 3 = renders through walls)
     BYTE* glowBase = reinterpret_cast<BYTE*>(pawn) + runtime.glowOffset;
-    if (g_espConfig.glow || g_espConfig.enable)
+    if (g_espConfig.glow || g_espConfig.chams || g_espConfig.enable)
     {
         runtime.setGlowColor(glowBase, PackRgba(glowHighlightColor));
         *eligible = 1;
-        runtime.setGlowType(glowBase, 3, 0.0f);
+        runtime.setGlowType(glowBase, 3, 0.0f); // Type 3 enables engine stencil glow & mesh pass through walls
         *glowing = 1;
     }
     return true;
@@ -2742,6 +2752,60 @@ static void DrawGearIcon(HDC hdc, int x, int y)
     DeleteObject(pen);
 }
 
+static void DrawChamsSettingsModal(HDC hdc, ESPConfig& cfg)
+{
+    if (!cfg.showChamsModal)
+        return;
+
+    DrawRoundedCard(hdc, 220, 110, 340, 270, RGB_COLOR(28, 28, 34), RGB_COLOR(60, 60, 70), 8);
+
+    HFONT titleFont = CreateFontW(14, 0, 0, 0, 600, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+    HGDIOBJ oldFont = SelectObject(hdc, titleFont);
+    SetBkMode(hdc, TRANSPARENT);
+    SetTextColor(hdc, RGB_COLOR(255, 255, 255));
+
+    RECT tRc = { 235, 122, 540, 145 };
+    DrawTextW(hdc, L"Chams Material & Target Settings", -1, &tRc, DT_LEFT | DT_SINGLELINE);
+
+    HFONT fontSmall = CreateFontW(13, 0, 0, 0, 400, FALSE, FALSE, FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+    SelectObject(hdc, fontSmall);
+
+    const wchar_t* styles[] = { L"Flat Solid", L"Textured", L"Wireframe", L"Glass Glow" };
+    for (int s = 0; s < 4; ++s)
+    {
+        bool sel = (cfg.chamsStyle == s);
+        DrawRoundedCard(hdc, 235, 150 + s * 28, 140, 24, sel ? RGB_COLOR(37, 99, 235) : RGB_COLOR(40, 40, 48), RGB_COLOR(60, 60, 70), 4);
+        SetTextColor(hdc, sel ? RGB_COLOR(255, 255, 255) : RGB_COLOR(161, 161, 170));
+        RECT sRc = { 235, 150 + s * 28, 375, 174 + s * 28 };
+        DrawTextW(hdc, styles[s], -1, &sRc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    }
+
+    SetTextColor(hdc, RGB_COLOR(228, 228, 231));
+    RECT lblRc = { 390, 150, 540, 170 };
+    DrawTextW(hdc, L"Chams Targets:", -1, &lblRc, DT_LEFT | DT_SINGLELINE);
+
+    DrawToggleSwitch(hdc, 390, 175, cfg.chamsEnemies);
+    RECT eRc = { 435, 175, 540, 195 };
+    DrawTextW(hdc, L"Enemy Pawns", -1, &eRc, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+
+    DrawToggleSwitch(hdc, 390, 205, cfg.chamsHands);
+    RECT hRc = { 435, 205, 540, 225 };
+    DrawTextW(hdc, L"Hands / Arms", -1, &hRc, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+
+    DrawToggleSwitch(hdc, 390, 235, cfg.chamsWeapons);
+    RECT wRc = { 435, 235, 540, 255 };
+    DrawTextW(hdc, L"Weapons", -1, &wRc, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+
+    DrawRoundedCard(hdc, 235, 335, 310, 32, RGB_COLOR(39, 39, 45), RGB_COLOR(60, 60, 70), 6);
+    SetTextColor(hdc, RGB_COLOR(255, 255, 255));
+    RECT btnRc = { 235, 335, 545, 367 };
+    DrawTextW(hdc, L"Close Settings", -1, &btnRc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+
+    SelectObject(hdc, oldFont);
+    DeleteObject(titleFont);
+    DeleteObject(fontSmall);
+}
+
 static void DrawRgbColorPickerModal(HDC hdc, ESPConfig& cfg)
 {
     if (!cfg.showRgbPickerModal || !cfg.targetRgbColor)
@@ -3167,6 +3231,9 @@ static LRESULT CALLBACK MenuWindowProc(HWND wnd, UINT msg, WPARAM wParam, LPARAM
         // Render RGB Color Picker Modal if open
         DrawRgbColorPickerModal(memDC, g_espConfig);
 
+        // Render Chams Settings Modal if open
+        DrawChamsSettingsModal(memDC, g_espConfig);
+
         SelectObject(memDC, oldFont);
         DeleteObject(tabFont);
         DeleteObject(rowFont);
@@ -3245,6 +3312,36 @@ static LRESULT CALLBACK MenuWindowProc(HWND wnd, UINT msg, WPARAM wParam, LPARAM
                 mouseX < 230 || mouseX > 550 || mouseY < 120 || mouseY > 370)
             {
                 g_espConfig.showRgbPickerModal = false;
+                InvalidateRect(wnd, nullptr, FALSE);
+                return 0;
+            }
+        }
+
+        // Chams Settings Modal click handling
+        if (g_espConfig.showChamsModal)
+        {
+            if (mouseX >= 235 && mouseX <= 375)
+            {
+                for (int s = 0; s < 4; ++s)
+                {
+                    if (mouseY >= 150 + s * 28 && mouseY <= 174 + s * 28)
+                    {
+                        g_espConfig.chamsStyle = s;
+                        InvalidateRect(wnd, nullptr, FALSE);
+                        return 0;
+                    }
+                }
+            }
+            if (mouseX >= 385 && mouseX <= 430)
+            {
+                if (mouseY >= 175 && mouseY <= 195) { g_espConfig.chamsEnemies = !g_espConfig.chamsEnemies; InvalidateRect(wnd, nullptr, FALSE); return 0; }
+                if (mouseY >= 205 && mouseY <= 225) { g_espConfig.chamsHands = !g_espConfig.chamsHands; InvalidateRect(wnd, nullptr, FALSE); return 0; }
+                if (mouseY >= 235 && mouseY <= 255) { g_espConfig.chamsWeapons = !g_espConfig.chamsWeapons; InvalidateRect(wnd, nullptr, FALSE); return 0; }
+            }
+            if ((mouseX >= 235 && mouseX <= 545 && mouseY >= 335 && mouseY <= 367) ||
+                mouseX < 220 || mouseX > 560 || mouseY < 110 || mouseY > 380)
+            {
+                g_espConfig.showChamsModal = false;
                 InvalidateRect(wnd, nullptr, FALSE);
                 return 0;
             }
@@ -3362,8 +3459,14 @@ static LRESULT CALLBACK MenuWindowProc(HWND wnd, UINT msg, WPARAM wParam, LPARAM
                     InvalidateRect(wnd, nullptr, FALSE);
                     return 0;
                 }
-                if (i == 6) // Chams Dual Colors
+                if (i == 6) // Chams Dual Colors & Gear Icon
                 {
+                    if (mouseX >= 242 && mouseX <= 265) // Gear Icon -> Opens Chams Settings Modal
+                    {
+                        g_espConfig.showChamsModal = !g_espConfig.showChamsModal;
+                        InvalidateRect(wnd, nullptr, FALSE);
+                        return 0;
+                    }
                     if (mouseX >= 268 && mouseX <= 290) // Color 1: Occluded (Behind Wall)
                     {
                         g_espConfig.targetRgbColor = &g_espConfig.chamsColorOccluded;
