@@ -55,6 +55,9 @@
       <RandomizedBaseAddress>true</RandomizedBaseAddress>
       <DataExecutionPrevention>true</DataExecutionPrevention>
     </Link>
+    <PreBuildEvent>
+      <Command>powershell -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)tools\apply-chams-render-pipeline.ps1" -InputPath "$(ProjectDir)src\dllmain.cpp" -OutputPath "$(ProjectDir)$(IntDir)dllmain.chams.cpp"</Command>
+    </PreBuildEvent>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <ClCompile>
@@ -80,9 +83,12 @@
       <RandomizedBaseAddress>true</RandomizedBaseAddress>
       <DataExecutionPrevention>true</DataExecutionPrevention>
     </Link>
+    <PreBuildEvent>
+      <Command>powershell -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)tools\apply-chams-render-pipeline.ps1" -InputPath "$(ProjectDir)src\dllmain.cpp" -OutputPath "$(ProjectDir)$(IntDir)dllmain.chams.cpp"</Command>
+    </PreBuildEvent>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <ClCompile Include="src\dllmain.cpp" />
+    <ClCompile Include="$(ProjectDir)$(IntDir)dllmain.chams.cpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
 </Project>
