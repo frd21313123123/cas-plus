@@ -1,4 +1,4 @@
-cas+ payload 4.3.0
+cas+ payload 4.4.1
 ===================
 
 Назначение
@@ -8,11 +8,44 @@ x64 payload с отдельным Win32-окном для локальных в�
 команды не отправляются. DirectX-hook, aim, автоматизация ввода и обход античита
 отсутствуют.
 
+Что исправлено в 4.4.1
+----------------------
+- Исправлен crash сразу после inject: актуальный ABI
+  ISchemaSystemTypeScope::FindDeclaredClass —
+  void(scope, SchemaMetaInfoHandle_t** out, const char* className). Результат
+  читается из явного out-параметра, а не из RAX.
+- ResolveEntityIdentityStride больше не вызывает SchemaSystem из worker-потока
+  во время inject. Stride извлекается из единственного совпадения полного
+  handle-resolver client.dll (imm8 по смещению +66); неоднозначность приводит к
+  безопасному отказу.
+- InstallFrameStageBridge больше не разрешает bot schema runtime заранее.
+  ResolveBotHighlightRuntime вызывается лениво только после включения подсветки,
+  из FrameStageNotify stage 12 на game thread.
+- Экспорт PotatoPayloadVersion обновлён до 0x00040401.
+
+Изменения 4.4.0
+----------------------
+- Исправлен общий обход сущностей после обновления CS2 от 2026-08-13:
+  жёсткий stride 0x78 заменён динамическим разрешением актуального значения
+  0x70. Безопасный inject-time resolver окончательно исправлен в 4.4.1.
+- Добавлено schema-разрешение полей bot highlight; его ABI и момент вызова
+  исправлены в 4.4.1.
+- Skybox и bot highlight используют единый проверенный EntityAtIndex; stock-карты
+  снова находят все C_EnvSky, включая карты с двумя сущностями.
+- Client tint синхронизируется со scene object через штатный render-color setter,
+  а glow type 3 регистрируется через glow-manager setter.
+- Restore возвращает render tint, glow color/type/time/start-time и вызывает
+  обратные setter-функции.
+- Bot filter учитывает controller FL_FAKECLIENT, pawn FL_BOT и консервативный
+  fallback SteamID==0 + bot difficulty 0..3.
+- Статусы Sky и Bots разделены; добавлены диагностические счётчики.
+
 Что добавлено в 4.3.0
 ----------------------
 - Checkbox "Highlight teammate bots (glow + green tint)" в окне INSERT.
 - Локальная команда берётся из m_bIsLocalPlayerController + m_iTeamNum; бот
-  определяется по FL_FAKECLIENT. Люди и противники не изменяются.
+  определяется по нескольким проверяемым bot-признакам. Люди и противники не
+  изменяются.
 - Pawn разрешается по полному handle с проверкой index + serial. Мёртвые pawn
   исключаются.
 - Поля разрешаются в рантайме через SchemaSystem_001 по именам классов/полей.
@@ -47,8 +80,8 @@ x64 payload с отдельным Win32-окном для локальных в�
 3. Загрузите только cas-plus-payload.dll в cs2.exe через cas+.
 4. Зайдите на карту и дождитесь завершения загрузки.
 5. Нажмите INSERT. Для teammate bots включите checkbox подсветки.
-6. Для skybox выберите preset и нажмите Apply. Успех подтверждается текстом:
-   "applied; both CS2 renderer caches confirmed".
+6. Для skybox выберите preset и нажмите Apply. Успех подтверждается строкой
+   "Sky: applied" и ненулевыми счётчиками entities, writes и renderer.
 7. После смены карты нажмите Apply повторно. Restore возвращает сохранённые
    материалы текущей карты.
 
@@ -65,7 +98,7 @@ Cloudy, Anubis, Dust 2, Mirage, Nuke, Overpass, Train, Vertigo, Aztec, Italy.
 m_hSkyMaterial, m_hSkyMaterialLightingOnly и двум renderer-cache.
 
 Абсолютной гарантии для injected DLL после любого будущего обновления CS2 не
-существует: это приватный ABI движка. Версия 4.3.0 специально работает
+существует: это приватный ABI движка. Версия 4.4.1 специально работает
 fail-closed и не продолжает запись, если проверка ABI не прошла.
 
 Glow-поле Source 2 не является публичным renderer API. Поэтому подсветка также
