@@ -1,4 +1,4 @@
-name: Build and Release
+name: Build DLL and Injector
 
 on:
   push:
@@ -14,14 +14,15 @@ on:
         type: string
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: cas-plus-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  build:
+  build-dll:
+    name: Build payload DLL (Release x64)
     runs-on: windows-latest
     timeout-minutes: 30
 
@@ -32,28 +33,168 @@ jobs:
       - name: Configure MSBuild
         uses: microsoft/setup-msbuild@v3
 
-      - name: Build x64 package
-        shell: pwsh
-        run: .\build.ps1 -Configuration Release
-
-      - name: Create release archive
+      - name: Build DLL
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Path dist -Force | Out-Null
-          Compress-Archive -Path artifacts/package/* -DestinationPath dist/cas-plus-windows-x64.zip -CompressionLevel Optimal
+          $out = Join-Path $env:GITHUB_WORKSPACE 'artifacts\payload'
+          New-Item -ItemType Directory -Path $out -Force | Out-Null
 
-      - name: Upload workflow artifact
+          & msbuild '.\payload\PotatoPayload.vcxproj' `
+            /m `
+            /nr:false `
+            /t:Rebuild `
+            /p:Configuration=Release `
+            /p:Platform=x64 `
+            /v:minimal `
+            "/p:OutDir=$out\"
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "Payload DLL build failed with exit code $LASTEXITCODE."
+          }
+
+          $dll = Join-Path $out 'cas-plus-payload.dll'
+          if (-not (Test-Path -LiteralPath $dll)) {
+            throw "Expected DLL was not produced: $dll"
+          }
+
+          Get-Item -LiteralPath $dll | Format-List Name,Length,LastWriteTime
+
+      - name: Upload DLL artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: cas-plus-payload-x64
+          path: artifacts/payload/cas-plus-payload.dll
+          if-no-files-found: error
+          retention-days: 14
+
+  build-injector:
+    name: Build injector (Release x64)
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Configure MSBuild
+        uses: microsoft/setup-msbuild@v3
+
+      - name: Build injector
+        shell: pwsh
+        run: |
+          $out = Join-Path $env:GITHUB_WORKSPACE 'artifacts\injector'
+          New-Item -ItemType Directory -Path $out -Force | Out-Null
+
+          & msbuild '.\injector\potatoInjector.vcxproj' `
+            /m `
+            /nr:false `
+            /t:Rebuild `
+            /p:Configuration=Release `
+            /p:Platform=x64 `
+            /v:minimal `
+            "/p:OutDir=$out\"
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "Injector build failed with exit code $LASTEXITCODE."
+          }
+
+          $exe = Join-Path $out 'cas-plus.exe'
+          if (-not (Test-Path -LiteralPath $exe)) {
+            throw "Expected injector was not produced: $exe"
+          }
+
+          Get-Item -LiteralPath $exe | Format-List Name,Length,LastWriteTime
+
+      - name: Upload injector artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: cas-plus-injector-x64
+          path: artifacts/injector/cas-plus.exe
+          if-no-files-found: error
+          retention-days: 14
+
+  package:
+    name: Package Windows x64
+    needs: [build-dll, build-injector]
+    runs-on: windows-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Download DLL
+        uses: actions/download-artifact@v8
+        with:
+          name: cas-plus-payload-x64
+          path: package/dlls
+
+      - name: Download injector
+        uses: actions/download-artifact@v8
+        with:
+          name: cas-plus-injector-x64
+          path: package
+
+      - name: Add documentation and create archive
+        shell: pwsh
+        run: |
+          if (Test-Path -LiteralPath '.\README.md') {
+            Copy-Item -LiteralPath '.\README.md' -Destination '.\package\README.md' -Force
+          }
+          if (Test-Path -LiteralPath '.\THIRD_PARTY_NOTICES.md') {
+            Copy-Item -LiteralPath '.\THIRD_PARTY_NOTICES.md' -Destination '.\package\THIRD_PARTY_NOTICES.md' -Force
+          }
+
+          if (-not (Test-Path -LiteralPath '.\package\cas-plus.exe')) {
+            throw 'Injector is missing from package.'
+          }
+          if (-not (Test-Path -LiteralPath '.\package\dlls\cas-plus-payload.dll')) {
+            throw 'Payload DLL is missing from package.'
+          }
+
+          New-Item -ItemType Directory -Path '.\dist' -Force | Out-Null
+          Compress-Archive -Path '.\package\*' -DestinationPath '.\dist\cas-plus-windows-x64.zip' -CompressionLevel Optimal -Force
+
+      - name: Upload complete package
         uses: actions/upload-artifact@v7
         with:
           name: cas-plus-windows-x64
-          path: artifacts/package
+          path: package
           if-no-files-found: error
+          retention-days: 14
 
-      - name: Publish GitHub Release
-        if: startsWith(github.ref, 'refs/tags/') || inputs.release_tag != ''
+      - name: Upload release archive
+        uses: actions/upload-artifact@v7
+        with:
+          name: cas-plus-windows-x64-zip
+          path: dist/cas-plus-windows-x64.zip
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    name: Publish GitHub Release
+    if: startsWith(github.ref, 'refs/tags/') || inputs.release_tag != ''
+    needs: package
+    runs-on: windows-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download release archive
+        uses: actions/download-artifact@v8
+        with:
+          name: cas-plus-windows-x64-zip
+          path: dist
+
+      - name: Publish release
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || inputs.release_tag }}
         run: |
-          gh release create "$env:RELEASE_TAG" dist/cas-plus-windows-x64.zip --repo "${{ github.repository }}" --target "${{ github.sha }}" --title "cas+ $env:RELEASE_TAG" --generate-notes
+          gh release create "$env:RELEASE_TAG" '.\dist\cas-plus-windows-x64.zip' `
+            --repo "${{ github.repository }}" `
+            --target "${{ github.sha }}" `
+            --title "cas+ $env:RELEASE_TAG" `
+            --generate-notes
