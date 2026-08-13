@@ -6,6 +6,8 @@ Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "CasPlusInjector", "injector
 EndProject
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "CasPlusPayload", "payload\PotatoPayload.vcxproj", "{0A8D265A-5884-4ECF-96D6-5B0484C3D67B}"
 EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "CasPlusLoader", "loader\Loader.vcxproj", "{4C52A189-A285-4E38-9B26-DE242E9D4C72}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|x64 = Debug|x64
@@ -20,6 +22,10 @@ Global
 		{0A8D265A-5884-4ECF-96D6-5B0484C3D67B}.Debug|x64.Build.0 = Debug|x64
 		{0A8D265A-5884-4ECF-96D6-5B0484C3D67B}.Release|x64.ActiveCfg = Release|x64
 		{0A8D265A-5884-4ECF-96D6-5B0484C3D67B}.Release|x64.Build.0 = Release|x64
+		{4C52A189-A285-4E38-9B26-DE242E9D4C72}.Debug|x64.ActiveCfg = Debug|x64
+		{4C52A189-A285-4E38-9B26-DE242E9D4C72}.Debug|x64.Build.0 = Debug|x64
+		{4C52A189-A285-4E38-9B26-DE242E9D4C72}.Release|x64.ActiveCfg = Release|x64
+		{4C52A189-A285-4E38-9B26-DE242E9D4C72}.Release|x64.Build.0 = Release|x64
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
