@@ -296,6 +296,9 @@ static bool g_botHighlightRestorePending = false;
 static unsigned int g_botHighlightFrameCounter = 0;
 static int g_lastBotHighlightResult = 0;
 static void* g_lastBotEntitySystem = nullptr;
+static void* g_lastLocalController = nullptr;
+static void* g_lastLocalControllerIdentity = nullptr;
+static unsigned int g_lastLocalControllerHandle = 0xFFFFFFFFu;
 static EntityRuntime g_preResolvedEntityRuntime{};
 static bool g_preResolvedEntityRuntimeReady = false;
 
@@ -1646,6 +1649,9 @@ static int UpdateBotHighlights(BotHighlightStats* stats)
     {
         g_originalBotHighlightCount = 0;
         g_botHighlightRestorePending = false;
+        g_lastLocalController = nullptr;
+        g_lastLocalControllerIdentity = nullptr;
+        g_lastLocalControllerHandle = 0xFFFFFFFFu;
     }
     g_lastBotEntitySystem = entitySystem;
 
@@ -1683,6 +1689,32 @@ static int UpdateBotHighlights(BotHighlightStats* stats)
         RestoreAllBotHighlights(stats);
         return BOT_HIGHLIGHT_WAITING_LOCAL;
     }
+
+    void* localIdentity = IsAccessible(localController, 0x18, false) ?
+        *reinterpret_cast<void**>(
+            reinterpret_cast<BYTE*>(localController) + 0x10) : nullptr;
+    const unsigned int localHandle = EntityHandleFor(localController);
+    if (!localIdentity || localHandle == 0xFFFFFFFFu)
+    {
+        RestoreAllBotHighlights(stats);
+        return BOT_HIGHLIGHT_WAITING_LOCAL;
+    }
+    if (g_lastLocalController &&
+        (g_lastLocalController != localController ||
+         g_lastLocalControllerIdentity != localIdentity ||
+         g_lastLocalControllerHandle != localHandle))
+    {
+        // A controller identity change is the strongest lifecycle boundary
+        // available without a second engine hook. Try a serial-checked restore,
+        // then discard any transient leftovers rather than carrying snapshots
+        // into a new map/session where pool addresses may be reused.
+        RestoreAllBotHighlights(stats);
+        g_originalBotHighlightCount = 0;
+        g_botHighlightRestorePending = false;
+    }
+    g_lastLocalController = localController;
+    g_lastLocalControllerIdentity = localIdentity;
+    g_lastLocalControllerHandle = localHandle;
 
     unsigned int humanControlledPawns[kControllerSlotLimit];
     ZeroBytes(humanControlledPawns, sizeof(humanControlledPawns));
