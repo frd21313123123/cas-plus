@@ -1,0 +1,39 @@
+# Visual Studio / MSBuild
+.vs/
+**/.vs/
+**/x64/
+**/Debug/
+**/Release/
+*.user
+*.suo
+*.VC.db
+*.VC.VC.opendb
+*.obj
+*.pdb
+*.ipdb
+*.iobj
+*.tlog
+*.recipe
+*.lastbuildstate
+*.log
+*.exp
+*.ilk
+*.exe
+*.dll
+*.sys
+*.lib
+
+# BlackBone is linked as a vendored, prebuilt static dependency.
+!injector/dependency/blackbone/Lib/BlackBone.lib
+
+# Generated packages
+artifacts/
+dist/
+dlls/
+
+# Local tooling
+.idea/
+.vscode/
+Thumbs.db
+Desktop.ini
+
