@@ -1,4 +1,4 @@
-﻿#include "pch.h"
+#include "pch.h"
 #include "Menu.hpp"
 
 #include <algorithm>
@@ -28,7 +28,6 @@ namespace
 #include "dependency/imgui/backend/imgui_impl_dx9.h"
 #include "dependency/imgui/backend/imgui_impl_win32.h"
 
-// Forward declare message handler from imgui_impl_win32.cpp
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
 namespace
@@ -53,28 +52,35 @@ namespace
 	ImVec4 canvasColor(bool darkTheme)
 	{
 		return darkTheme
-			? ImVec4(0.035f, 0.047f, 0.078f, 1.0f)
+			? ImVec4(0.040f, 0.045f, 0.065f, 1.0f)
 			: ImVec4(0.955f, 0.970f, 0.990f, 1.0f);
 	}
 
 	ImVec4 outerCanvasColor(bool darkTheme)
 	{
 		return darkTheme
-			? ImVec4(0.075f, 0.095f, 0.140f, 1.0f)
+			? ImVec4(0.065f, 0.075f, 0.110f, 1.0f)
 			: ImVec4(0.875f, 0.910f, 0.960f, 1.0f);
+	}
+
+	void renderKeybindBadge(const char* label, const char* keyText)
+	{
+		ImGui::TextUnformatted(label);
+		ImGui::SameLine(ImGui::GetWindowWidth() - 75.0f);
+		ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.18f, 0.15f, 0.28f, 1.0f));
+		ImGui::Button(keyText, ImVec2(60.0f, 20.0f));
+		ImGui::PopStyleColor();
 	}
 }
 
 bool Menu::initialize()
 {
-	// Create application window
-	//ImGui_ImplWin32_EnableDpiAwareness();
 	WNDCLASSEX wc = { sizeof(WNDCLASSEX), CS_CLASSDC, Menu::WndProc, 0L, 0L, GetModuleHandle(NULL), NULL, NULL, NULL, NULL, _T("WC"), NULL };
 	::RegisterClassEx(&wc);
 	const auto nativeWindowTitle = makeRandomWindowTitle();
 	this->hwnd = ::CreateWindow(wc.lpszClassName, nativeWindowTitle.c_str(),
 		WS_POPUP,
-		100, 100, 500, 640, NULL, NULL, wc.hInstance, NULL);
+		100, 100, 780, 620, NULL, NULL, wc.hInstance, NULL);
 	if (this->hwnd == nullptr)
 	{
 		::UnregisterClass(wc.lpszClassName, wc.hInstance);
@@ -82,7 +88,6 @@ bool Menu::initialize()
 	}
 	applyRoundedWindowRegion(this->hwnd);
 
-	// Initialize Direct3D
 	if (!createD3D9Device(hwnd))
 	{
 		cleanupD3D9Device();
@@ -90,20 +95,16 @@ bool Menu::initialize()
 		return 1;
 	}
 
-	// Show the window
 	::ShowWindow(hwnd, SW_SHOWDEFAULT);
 	::UpdateWindow(hwnd);
 
-	// Setup Dear ImGui context
 	IMGUI_CHECKVERSION();
 	ImGui::CreateContext();
 	ImGuiIO& io = ImGui::GetIO(); (void)io;
 	io.WantSaveIniSettings = false;
 
-	// Setup Dear ImGui style
 	setupMenuStyle(true, 1);
 
-	// Setup Platform/Renderer backends
 	ImGui_ImplWin32_Init(hwnd);
 	ImGui_ImplDX9_Init(this->d3dDevice);
 
@@ -117,7 +118,6 @@ bool Menu::initialize()
 
 void Menu::loop()
 {
-	// Main loop
 	while (this->isMenuOn)
 	{
 		MSG msg;
@@ -131,7 +131,6 @@ void Menu::loop()
 		if (!this->isMenuOn)
 			break;
 
-		// Start the Dear ImGui frame
 		ImGui_ImplDX9_NewFrame();
 		ImGui_ImplWin32_NewFrame();
 		ImGui::NewFrame();
@@ -143,39 +142,372 @@ void Menu::loop()
 			ImVec2(std::max(0.0f, displaySize.x - outerMargin * 2.0f),
 				std::max(0.0f, displaySize.y - outerMargin * 2.0f)),
 			ImGuiCond_Always);
-		ImGui::Begin("cas+", nullptr,
+		ImGui::Begin("cas v2.3", nullptr,
 			ImGuiWindowFlags_NoTitleBar |
 			ImGuiWindowFlags_NoMove |
 			ImGuiWindowFlags_NoCollapse |
 			ImGuiWindowFlags_NoResize |
 			ImGuiWindowFlags_NoSavedSettings |
 			ImGuiWindowFlags_NoScrollbar);
-		ImGui::BeginChild("Hero", ImVec2(0, 86), true);
-		ImGui::BeginGroup();
-		ImGui::TextColored(isDarkTheme ? ImVec4(0.42f, 0.80f, 1.00f, 1.00f) : ImVec4(0.08f, 0.40f, 0.78f, 1.00f), "CAS+");
-		ImGui::TextDisabled("A clean workspace for your selected module");
-		ImGui::EndGroup();
-		ImGui::SameLine(ImGui::GetWindowWidth() - 125.0f);
-		if (ImGui::Button(isDarkTheme ? "Day mode" : "Night mode", ImVec2(104.0f, 30.0f)))
-		{
-			isDarkTheme = !isDarkTheme;
-			setupMenuStyle(isDarkTheme, 1.0f);
-		}
-		ImGui::SameLine(0.0f, 8.0f);
-		if (ImGui::Button("X", ImVec2(28.0f, 30.0f)))
+
+		// Top Header
+		ImGui::BeginChild("Header", ImVec2(0, 52), true);
+		ImGui::TextColored(ImVec4(0.65f, 0.45f, 1.00f, 1.0f), "CAS v2.3");
+		ImGui::SameLine();
+		ImGui::TextDisabled(" | Nixware UI Replica");
+		ImGui::SameLine(ImGui::GetWindowWidth() - 36.0f);
+		if (ImGui::Button("X", ImVec2(28.0f, 26.0f)))
 			::PostMessage(hwnd, WM_CLOSE, 0, 0);
-		ImGui::TextDisabled("%s theme  -  live monitoring enabled", isDarkTheme ? "Night" : "Day");
 		ImGui::EndChild();
 		ImGui::Spacing();
 
-		renderStatusPanel();
-		renderTargetPanel();
-		const auto paths = snapshotDllPaths();
-		renderInjectionPanel(paths);
+		// Main Nav Tabs (CLICKABLE)
+		static const char* mainTabs[] = { "Ragebot", "Anti-Aim", "Visuals", "Misc", "Configs" };
+		const float tabWidth = (ImGui::GetWindowWidth() - 10.0f - (4.0f * 6.0f)) / 5.0f;
+		for (int i = 0; i < 5; ++i)
+		{
+			if (i > 0) ImGui::SameLine(0.0f, 6.0f);
+			const bool isSelected = (this->activeTab == i);
+			if (isSelected)
+			{
+				ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.48f, 0.30f, 0.88f, 1.0f));
+				ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.55f, 0.36f, 0.96f, 1.0f));
+			}
+			else
+			{
+				ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.11f, 0.13f, 0.19f, 1.0f));
+				ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.18f, 0.20f, 0.28f, 1.0f));
+			}
+			if (ImGui::Button(mainTabs[i], ImVec2(tabWidth, 34.0f)))
+			{
+				this->activeTab = i;
+				this->activeSubtab = 0;
+			}
+			ImGui::PopStyleColor(2);
+		}
+
+		// Subtabs (CLICKABLE)
+		ImGui::Spacing();
+		std::vector<const char*> subtabs;
+		if (this->activeTab == 0) subtabs = { "General" };
+		else if (this->activeTab == 1) subtabs = { "General", "Builder", "Adaptive" };
+		else if (this->activeTab == 2) subtabs = { "General", "World", "Local player", "Extra", "Chams" };
+		else if (this->activeTab == 3) subtabs = { "General", "Shared features" };
+		else if (this->activeTab == 4) subtabs = { "General" };
+
+		for (size_t i = 0; i < subtabs.size(); ++i)
+		{
+			if (i > 0) ImGui::SameLine(0.0f, 6.0f);
+			const bool isSubSelected = (this->activeSubtab == static_cast<int>(i));
+			if (isSubSelected)
+			{
+				ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.35f, 0.22f, 0.65f, 1.0f));
+				ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.42f, 0.28f, 0.75f, 1.0f));
+			}
+			else
+			{
+				ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.09f, 0.10f, 0.15f, 1.0f));
+				ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.15f, 0.17f, 0.24f, 1.0f));
+			}
+			if (ImGui::Button(subtabs[i], ImVec2(120.0f, 26.0f)))
+				this->activeSubtab = static_cast<int>(i);
+			ImGui::PopStyleColor(2);
+		}
+		ImGui::Spacing();
+
+		// Content Panel (READ-ONLY / DISABLED FOR ALL INNER CONTROLS)
+		ImGui::BeginChild("ContentArea", ImVec2(0, 0), true);
+		ImGui::BeginDisabled(true);
+
+		// Render active tab & subtab content
+		if (this->activeTab == 0) // Ragebot
+		{
+			ImGui::Columns(2, nullptr, false);
+			ImGui::TextDisabled("Main - Movement assists");
+			ImGui::Separator();
+			renderKeybindBadge("Edge jump", "[ALT]");
+			static bool duckpeek = false; ImGui::Checkbox("Duck peek assist", &duckpeek);
+			static int duckdmg = 93; ImGui::SliderInt("Duck peek minimal damage", &duckdmg, 1, 130);
+			renderKeybindBadge("Duck peek assist bind", "[X]");
+			static bool aipeek = false; ImGui::Checkbox("Auto peek assistant", &aipeek);
+			renderKeybindBadge("Auto peek assistant bind", "[M4]");
+			static int aipdmg = 93; ImGui::SliderInt("Auto peek minimal damage", &aipdmg, 1, 130);
+
+			ImGui::NextColumn();
+			ImGui::TextDisabled("Extra - Damage override");
+			ImGui::Separator();
+			renderKeybindBadge("Override minimal damage bind", "[M5]");
+			static int ovdmg = 45; ImGui::SliderInt("Override minimal damage", &ovdmg, 1, 130);
+
+			ImGui::Spacing(); ImGui::Spacing();
+			ImGui::TextDisabled("Air aim - Airborne target assist");
+			ImGui::Separator();
+			static bool airaim = false; ImGui::Checkbox("Air Aim Assist", &airaim);
+			static bool airatk = true; ImGui::Checkbox("Only while attacking", &airatk);
+			static int airhitbox = 1; ImGui::Combo("Air hitbox priority", &airhitbox, "Head only\0Head + chest\0Smart\0");
+			static int airfov = 12; ImGui::SliderInt("Air maximum FOV", &airfov, 1, 45, "%d°");
+			static int airdmg = 45; ImGui::SliderInt("Air minimal damage", &airdmg, 1, 130);
+			static int airstr = 100; ImGui::SliderInt("Aim strength", &airstr, 20, 100, "%d%%");
+			static bool airfire = false; ImGui::Checkbox("Air auto fire", &airfire);
+			ImGui::Columns(1);
+		}
+		else if (this->activeTab == 1) // Anti-Aim
+		{
+			if (this->activeSubtab == 0) // General
+			{
+				ImGui::Columns(2, nullptr, false);
+				ImGui::TextDisabled("Main - Manual direction");
+				ImGui::Separator();
+				static bool manena = true; ImGui::Checkbox("Manual direction", &manena);
+				static int baseyaw = 180; ImGui::SliderInt("Fallback base yaw", &baseyaw, -180, 180, "%d°");
+				static int manoff = 97; ImGui::SliderInt("Manual yaw offset", &manoff, 0, 180, "%d°");
+				renderKeybindBadge("Manual left", "[Z]");
+				renderKeybindBadge("Manual right", "[C]");
+				static bool staticman = true; ImGui::Checkbox("Static manuals", &staticman);
+				static bool manind = true; ImGui::Checkbox("Manuals indication", &manind);
+
+				ImGui::NextColumn();
+				ImGui::TextDisabled("Other - Movement");
+				ImGui::Separator();
+				static bool duckjump = false; ImGui::Checkbox("Duck Jump [WIP]", &duckjump);
+				renderKeybindBadge("Duck Jump bind", "[SPACE]");
+
+				ImGui::Spacing(); ImGui::Spacing();
+				ImGui::TextDisabled("Fake Duck");
+				ImGui::Separator();
+				static bool fakeduck = false; ImGui::Checkbox("Fake Duck", &fakeduck);
+				renderKeybindBadge("Fake Duck bind", "[V]");
+				static bool fdground = true; ImGui::Checkbox("Ground only", &fdground);
+				static int fdhigh = 82; ImGui::SliderInt("Crouch switch threshold", &fdhigh, 55, 100, "%d%%");
+				static int fdlow = 20; ImGui::SliderInt("Stand switch threshold", &fdlow, 0, 45, "%d%%");
+				static int fddelay = 30; ImGui::SliderInt("Minimum phase time", &fddelay, 0, 180, "%d ms");
+				ImGui::Columns(1);
+			}
+			else if (this->activeSubtab == 1) // Builder
+			{
+				ImGui::Columns(2, nullptr, false);
+				ImGui::TextDisabled("Main - Anti-Aim Builder");
+				ImGui::Separator();
+				static bool aabuilder = true; ImGui::Checkbox("Anti-Aim Builder", &aabuilder);
+				static int aacond = 0; ImGui::Combo("Condition", &aacond, "Stand\0Run\0In-Air\0Air-Duck\0Duck\0Duck-Walk\0");
+
+				ImGui::NextColumn();
+				ImGui::TextDisabled("Profile Settings");
+				ImGui::Separator();
+				static bool stena = true; ImGui::Checkbox("Enabled", &stena);
+				static int stbase = 180; ImGui::SliderInt("Base Yaw", &stbase, -180, 180, "%d°");
+				static int stmod = 1; ImGui::Combo("Yaw Modifier", &stmod, "None\0Center\0Offset\0Random\0 3-Way\0 5-Way\0Spin\0");
+				static int moff = 58; ImGui::SliderInt("Modifier Offset", &moff, 0, 180, "%d°");
+				static bool rnd = false; ImGui::Checkbox("Controlled base randomization", &rnd);
+				static int rndr = 24; ImGui::SliderInt("Random Range", &rndr, 0, 180, "%d°");
+				static int rndi = 260; ImGui::SliderInt("Random Interval", &rndi, 50, 1500, "%d ms");
+				ImGui::Columns(1);
+			}
+			else // Adaptive
+			{
+				ImGui::Columns(2, nullptr, false);
+				ImGui::TextDisabled("Global");
+				ImGui::Separator();
+				static int pitch = 1; ImGui::Combo("Pitch [Global]", &pitch, "None\0Down\0Fake\0");
+				static bool aaind = true; ImGui::Checkbox("AA state indicator", &aaind);
+
+				ImGui::Spacing(); ImGui::Spacing();
+				ImGui::TextDisabled("Freestanding / Auto Direction");
+				ImGui::Separator();
+				static bool freeena = false; ImGui::Checkbox("Freestanding / Auto Direction", &freeena);
+				renderKeybindBadge("Freestanding on key", "[NONE]");
+				static int freedelta = 90; ImGui::SliderInt("Freestanding yaw", &freedelta, 45, 180, "%d°");
+				static int freeint = 120; ImGui::SliderInt("Scan interval", &freeint, 50, 500, "%d ms");
+
+				ImGui::NextColumn();
+				ImGui::TextDisabled("Air Flick");
+				ImGui::Separator();
+				static bool airf = false; ImGui::Checkbox("Air Flick", &airf);
+				static int airfint = 420; ImGui::SliderInt("Air Flick interval", &airfint, 120, 1500, "%d ms");
+				static int airfdelta = 95; ImGui::SliderInt("Air Flick yaw", &airfdelta, 45, 180, "%d°");
+
+				ImGui::Spacing(); ImGui::Spacing();
+				ImGui::TextDisabled("Landing AA");
+				ImGui::Separator();
+				static bool landaa = false; ImGui::Checkbox("Landing AA", &landaa);
+				static int landdur = 120; ImGui::SliderInt("Landing duration", &landdur, 20, 500, "%d ms");
+				static int landyaw = 180; ImGui::SliderInt("Landing yaw", &landyaw, -180, 180, "%d°");
+				static bool landzero = true; ImGui::Checkbox("Zero pitch on land", &landzero);
+				ImGui::Columns(1);
+			}
+		}
+		else if (this->activeTab == 2) // Visuals
+		{
+			if (this->activeSubtab == 0) // General
+			{
+				ImGui::Columns(2, nullptr, false);
+				ImGui::TextDisabled("Camera");
+				ImGui::Separator();
+				static int tpdist = 350; ImGui::SliderInt("Thirdperson distance", &tpdist, 0, 10000);
+				static bool tpzoom = false; ImGui::Checkbox("Thirdperson wheel zoom", &tpzoom);
+				static int tpstep = 100; ImGui::SliderInt("Wheel zoom step", &tpstep, 10, 1000);
+				static int wfov = 90; ImGui::SliderInt("Override FOV", &wfov, 65, 140, "%d°");
+
+				ImGui::Spacing(); ImGui::Spacing();
+				ImGui::TextDisabled("Scope");
+				ImGui::Separator();
+				static bool noscope = false; ImGui::Checkbox("Disable scope zoom", &noscope);
+				static bool custscope = false; ImGui::Checkbox("Override scope overlay", &custscope);
+				static float scolor[4] = { 1.0f, 1.0f, 1.0f, 1.0f }; ImGui::ColorEdit4("First color", scolor);
+				static int ssize = 50; ImGui::SliderInt("Line size", &ssize, 1, 250);
+				static int sgap = 32; ImGui::SliderInt("Line gap", &sgap, 0, 250);
+				static int sfade = 12; ImGui::SliderInt("Line gradient size", &sfade, 0, 250);
+
+				ImGui::NextColumn();
+				ImGui::TextDisabled("Bullet visualization");
+				ImGui::Separator();
+				static bool btracers = false; ImGui::Checkbox("Local bullet tracers", &btracers);
+				static int tdur = 4; ImGui::SliderInt("Tracers duration", &tdur, 1, 10, "%d s");
+				static float tcol[4] = { 0.25f, 0.75f, 1.0f, 1.0f }; ImGui::ColorEdit4("Tracers color", tcol);
+				static bool bimpacts = false; ImGui::Checkbox("Bullet impacts", &bimpacts);
+				static int idur = 4; ImGui::SliderInt("Impacts duration", &idur, 1, 10, "%d s");
+				static float icol[4] = { 1.0f, 0.25f, 0.25f, 1.0f }; ImGui::ColorEdit4("Impacts color", icol);
+				ImGui::Columns(1);
+			}
+			else if (this->activeSubtab == 1) // World
+			{
+				ImGui::Columns(2, nullptr, false);
+				ImGui::TextDisabled("World");
+				ImGui::Separator();
+				static bool custsky = false; ImGui::Checkbox("Custom skybox", &custsky);
+				static int skycombo = 0; ImGui::Combo("Skybox", &skycombo, "Cloudy\0Anubis\0Dust 2\0Mirage\0Nuke\0Overpass\0Train\0Vertigo\0Aztec\0Italy\0");
+				ImGui::Button("Apply selected skybox", ImVec2(-1, 30));
+
+				ImGui::NextColumn();
+				ImGui::TextDisabled("Wall penetration");
+				ImGui::Separator();
+				static bool wallbang = false; ImGui::Checkbox("Highlight penetrable surfaces", &wallbang);
+				static float wbcol[4] = { 0.3f, 1.0f, 0.55f, 1.0f }; ImGui::ColorEdit4("Surface highlight color", wbcol);
+				static bool wbcross = false; ImGui::Checkbox("Wallbang crosshair indicator", &wbcross);
+				static float wbok[4] = { 0.3f, 1.0f, 0.55f, 1.0f }; ImGui::ColorEdit4("Penetrable color", wbok);
+				static float wbbad[4] = { 1.0f, 0.25f, 0.25f, 1.0f }; ImGui::ColorEdit4("Blocked color", wbbad);
+				static int wbdepth = 48; ImGui::SliderInt("Probe depth", &wbdepth, 8, 128);
+				static bool wbdmg = true; ImGui::Checkbox("Show penetration damage", &wbdmg);
+				ImGui::Columns(1);
+			}
+			else if (this->activeSubtab == 2) // Local player
+			{
+				ImGui::TextDisabled("Local model");
+				ImGui::Separator();
+				static bool localoutline = false; ImGui::Checkbox("Local model fallback outline", &localoutline);
+			}
+			else if (this->activeSubtab == 3) // Extra
+			{
+				ImGui::Columns(2, nullptr, false);
+				ImGui::TextDisabled("Grenades");
+				ImGui::Separator();
+				static bool gtrail = false; ImGui::Checkbox("Grenade trail", &gtrail);
+				static int gtdur = 5; ImGui::SliderInt("Grenade trail duration", &gtdur, 1, 10, "%d s");
+				static bool gradius = false; ImGui::Checkbox("Grenade Radius", &gradius);
+				static float mcol[4] = { 1.0f, 0.25f, 0.25f, 1.0f }; ImGui::ColorEdit4("Molotov Radius Color", mcol);
+				static float scol[4] = { 0.65f, 0.8f, 1.0f, 1.0f }; ImGui::ColorEdit4("Smoke Radius Color", scol);
+
+				ImGui::NextColumn();
+				ImGui::TextDisabled("Sounds");
+				ImGui::Separator();
+				static bool hitsound = false; ImGui::Checkbox("Custom Hit Sound", &hitsound);
+				static char soundname[128] = "sounds\\music\\revenge.vsnd"; ImGui::InputText("Sound name", soundname, sizeof(soundname));
+				static int hitvol = 40; ImGui::SliderInt("Hit Sound volume", &hitvol, 1, 100, "%d%%");
+				ImGui::Columns(1);
+			}
+			else // Chams
+			{
+				ImGui::Columns(2, nullptr, false);
+				ImGui::TextDisabled("Chams");
+				ImGui::Separator();
+				static bool chamsena = false; ImGui::Checkbox("Enable", &chamsena);
+				static bool chamsloc = true; ImGui::Checkbox("Local Model", &chamsloc);
+				static bool chamsatt = false; ImGui::Checkbox("Attachments", &chamsatt);
+
+				ImGui::NextColumn();
+				ImGui::TextDisabled("Chams Settings");
+				ImGui::Separator();
+				static int loctype = 0; ImGui::Combo("Local Model Chams Type", &loctype, "Glass\0Glow\0");
+				static float loccol[4] = { 0.65f, 0.43f, 1.0f, 1.0f }; ImGui::ColorEdit4("Local Model Chams Color", loccol);
+				static int atttype = 1; ImGui::Combo("Attachments Chams Type", &atttype, "Glass\0Glow\0");
+				static float attcol[4] = { 0.25f, 0.75f, 1.0f, 1.0f }; ImGui::ColorEdit4("Attachments Chams Color", attcol);
+				ImGui::Columns(1);
+			}
+		}
+		else if (this->activeTab == 3) // Misc
+		{
+			if (this->activeSubtab == 0) // General
+			{
+				ImGui::Columns(2, nullptr, false);
+				ImGui::TextDisabled("Windows");
+				ImGui::Separator();
+				static bool wmark = true; ImGui::Checkbox("Watermark", &wmark);
+				static bool wbinds = true; ImGui::Checkbox("Keybinds", &wbinds);
+				static bool wbomb = true; ImGui::Checkbox("Bomb Info", &wbomb);
+				static bool wtips = true; ImGui::Checkbox("Setting tooltips", &wtips);
+
+				ImGui::Spacing(); ImGui::Spacing();
+				ImGui::TextDisabled("Match statistics");
+				ImGui::Separator();
+				static bool skd = false; ImGui::Checkbox("Show K/D", &skd);
+				static bool skills = false; ImGui::Checkbox("Show kills", &skills);
+				static bool sdeaths = false; ImGui::Checkbox("Show deaths", &sdeaths);
+
+				ImGui::NextColumn();
+				ImGui::TextDisabled("Player model");
+				ImGui::Separator();
+				static bool agentena = false; ImGui::Checkbox("Agent changer enabled", &agentena);
+				static int agentcombo = 0; ImGui::Combo("Agent changer", &agentcombo, "Custom\0Special Agent Ava | FBI\0Operator | FBI SWAT\0Markus Delrow | FBI HRT\0");
+				static char cmodel[128] = "agents/models/ctm_fbi/ctm_fbi_variantb.vmdl"; ImGui::InputText("Custom model", cmodel, sizeof(cmodel));
+				static bool agentcross = false; ImGui::Checkbox("Allow cross-team agent", &agentcross);
+				ImGui::Button("Apply selected agent", ImVec2(-1, 30));
+
+				ImGui::Spacing(); ImGui::Spacing();
+				ImGui::TextDisabled("Buy bot");
+				ImGui::Separator();
+				static bool buyena = false; ImGui::Checkbox("Buy bot", &buyena);
+				static int buyprim = 0; ImGui::Combo("Primary weapon", &buyprim, "None\0SCAR20/G3SG1\0SSG08\0AWP\0AK-47/M4A1(-S)\0");
+				static int buysec = 0; ImGui::Combo("Secondary weapon", &buysec, "None\0FN57/TEC9\0Dual Elites\0Deagle\0Revolver\0");
+				static bool eqfire = false; ImGui::Checkbox("Fire grenade/Molotov", &eqfire);
+				static bool eqsmoke = false; ImGui::Checkbox("Smoke grenade", &eqsmoke);
+				static bool eqhe = false; ImGui::Checkbox("Explosive grenade", &eqhe);
+				static bool eqvest = false; ImGui::Checkbox("Kevlar", &eqvest);
+				static bool eqhelm = false; ImGui::Checkbox("Helmet", &eqhelm);
+				ImGui::Columns(1);
+			}
+			else // Shared features
+			{
+				ImGui::TextDisabled("Shared features");
+				ImGui::Separator();
+				static bool spamena = false; ImGui::Checkbox("Clantag\\Name spammer", &spamena);
+				static int spamtype = 0; ImGui::Combo("Clantag type", &spamtype, "Default\0Custom\0");
+				static char spamtext[64] = "cas"; ImGui::InputText("Custom text", spamtext, sizeof(spamtext));
+			}
+		}
+		else // Configs
+		{
+			ImGui::Columns(2, nullptr, false);
+			ImGui::TextDisabled("Actions");
+			ImGui::Separator();
+			static int cfgslot = 0; ImGui::Combo("List", &cfgslot, "Slot 1\0Slot 2\0Slot 3\0Slot 4\0Slot 5\0");
+			ImGui::Spacing();
+			ImGui::Button("Load config", ImVec2(-1, 32));
+			ImGui::Button("Save config", ImVec2(-1, 32));
+			ImGui::Button("Reset config", ImVec2(-1, 32));
+
+			ImGui::NextColumn();
+			ImGui::TextDisabled("Config Status");
+			ImGui::Separator();
+			ImGui::TextColored(ImVec4(0.35f, 0.85f, 0.55f, 1.0f), "Status: Slot 1 ready");
+			ImGui::TextDisabled("Last updated: Just now");
+			ImGui::Columns(1);
+		}
+
+		ImGui::EndDisabled();
+		ImGui::EndChild();
 
 		ImGui::End();
 
-		// Rendering
 		ImGui::EndFrame();
 
 		this->d3dDevice->SetRenderState(D3DRS_ZENABLE, FALSE);
@@ -191,7 +523,6 @@ void Menu::loop()
 			this->d3dDevice->EndScene();
 		}
 		HRESULT result = this->d3dDevice->Present(NULL, NULL, NULL, NULL);
-
 	}
 }
 
@@ -246,8 +577,7 @@ LRESULT __stdcall Menu::WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
 			static_cast<LONG>(static_cast<short>(LOWORD(lParam))),
 			static_cast<LONG>(static_cast<short>(HIWORD(lParam))) };
 		::ScreenToClient(hWnd, &cursor);
-		// Keep the Hero area draggable while leaving the theme and close buttons clickable.
-		if (cursor.y >= 0 && cursor.y < 86 && cursor.x < 330)
+		if (cursor.y >= 0 && cursor.y < 52 && cursor.x < 700)
 			return HTCAPTION;
 		break;
 	}
@@ -255,7 +585,7 @@ LRESULT __stdcall Menu::WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
 		applyRoundedWindowRegion(hWnd);
 		break;
 	case WM_SYSCOMMAND:
-		if ((wParam & 0xfff0) == SC_KEYMENU) // Disable ALT application menu
+		if ((wParam & 0xfff0) == SC_KEYMENU)
 			return 0;
 		break;
 	case WM_DESTROY:
@@ -265,126 +595,10 @@ LRESULT __stdcall Menu::WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lPara
 	return ::DefWindowProc(hWnd, msg, wParam, lParam);
 }
 
-void Menu::renderStatusPanel()
-{
-	ImGui::BeginChild("StatusPanel", ImVec2(0, 112), true);
-	ImGui::TextDisabled("SYSTEM STATUS");
-	ImGui::SameLine(ImGui::GetWindowWidth() - 96.0f);
-		ImGui::TextColored(ImVec4(0.35f, 0.82f, 0.55f, 1.0f), "ONLINE");
-	ImGui::Separator();
-
-	const auto status = [](const char* label, bool active, const char* activeText, const char* inactiveText)
-	{
-		ImGui::TextColored(active ? ImVec4(0.35f, 0.85f, 0.55f, 1.0f) : ImVec4(0.92f, 0.38f, 0.42f, 1.0f), ">>");
-		ImGui::SameLine();
-		ImGui::TextUnformatted(label);
-		ImGui::SameLine(178.0f);
-		ImGui::TextColored(active ? ImVec4(0.35f, 0.85f, 0.55f, 1.0f) : ImVec4(0.92f, 0.38f, 0.42f, 1.0f), "%s", active ? activeText : inactiveText);
-	};
-
-	status("Steam", g_injector->steamRunning, "RUNNING", "OFFLINE");
-	status("CS2", g_injector->csgoRunning, this->isInjecting ? "INJECTING" : "RUNNING", "OFFLINE");
-	ImGui::TextDisabled("VAC3 patching is disabled");
-	ImGui::EndChild();
-}
-
-void Menu::renderTargetPanel()
-{
-	ImGui::BeginChild("TargetPanel", ImVec2(0, 150), true);
-		ImGui::TextDisabled("TARGET PROCESS");
-		ImGui::Separator();
-		ImGui::Checkbox("Auto-close after operation", &g_injector->shouldAutoExit);
-		ImGui::Checkbox("Use custom process", &g_injector->isCustomProcess);
-
-		if (g_injector->isCustomProcess)
-		{
-			auto processes = mem::getProcList();
-			std::string processItems;
-			std::vector<std::wstring> processNames;
-			for (const auto& process : processes)
-			{
-				for (const auto character : process.second)
-					processItems += static_cast<char>(character);
-				processItems.push_back('\0');
-				processNames.push_back(process.second);
-			}
-			processItems.push_back('\0');
-
-			if (!processNames.empty())
-			{
-				this->selectedProcess = std::clamp(this->selectedProcess, 0, static_cast<int>(processNames.size()) - 1);
-				if (ImGui::Combo("Process", &this->selectedProcess, processItems.c_str()))
-					g_injector->customProcessName = processNames[this->selectedProcess];
-			}
-			else
-			{
-				ImGui::TextDisabled("No running processes found");
-			}
-		}
-		else
-		{
-			ImGui::TextDisabled("Target: Counter-Strike 2");
-		}
-	ImGui::EndChild();
-}
-
-std::vector<std::string> Menu::snapshotDllPaths()
-{
-	std::scoped_lock lock(this->mtx);
-	return this->filePaths;
-}
-
-void Menu::renderInjectionPanel(const std::vector<std::string>& paths)
-{
-	ImGui::BeginChild("ModulePanel", ImVec2(0, 0), true);
-		ImGui::TextDisabled("MODULE WORKSPACE");
-		ImGui::Separator();
-		if (paths.empty())
-		{
-			ImGui::TextDisabled("No DLL files found in ./dlls");
-			ImGui::Spacing();
-			ImGui::TextWrapped("Place a DLL in the dlls folder to make it available here.");
-		}
-		else
-		{
-			std::string dllItems;
-			for (const auto& path : paths)
-			{
-				const auto separator = path.find_last_of("\\/");
-				dllItems += path.substr(separator == std::string::npos ? 0 : separator + 1);
-				dllItems.push_back('\0');
-			}
-			dllItems.push_back('\0');
-			this->selectedDLL = std::clamp(this->selectedDLL, 0, static_cast<int>(paths.size()) - 1);
-			ImGui::Combo("DLL", &this->selectedDLL, dllItems.c_str());
-		}
-
-		ImGui::Spacing();
-		const bool canInject = !paths.empty() && !this->isInjecting;
-		if (!canInject)
-			ImGui::BeginDisabled();
-		ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.20f, 0.52f, 0.92f, canInject ? 1.0f : 0.35f));
-		ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.28f, 0.63f, 1.0f, 1.0f));
-		ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.12f, 0.40f, 0.82f, 1.0f));
-		if (ImGui::Button(this->isInjecting ? "Injecting..." : "Inject selected module", ImVec2(-1.0f, 42.0f)) && canInject)
-		{
-			bool valid = true;
-			if (g_injector->isCustomProcess && mem::getProcID(g_injector->customProcessName) == NULL)
-			{
-				MessageBox(hwnd, L"Custom process not found...", nullptr, 0);
-				valid = false;
-			}
-			if (valid)
-				std::thread(&Injector::inject, g_injector.get(), paths[this->selectedDLL]).detach();
-		}
-		if (!canInject)
-			ImGui::EndDisabled();
-		ImGui::PopStyleColor(3);
-
-		if (this->isInjecting)
-			ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.25f, 1.0f), "Injecting module...");
-	ImGui::EndChild();
-}
+void Menu::renderStatusPanel() {}
+void Menu::renderTargetPanel() {}
+std::vector<std::string> Menu::snapshotDllPaths() { return {}; }
+void Menu::renderInjectionPanel(const std::vector<std::string>& paths) {}
 
 void Menu::setupMenuStyle(bool isDarkTheme, float alpha)
 {
@@ -392,97 +606,42 @@ void Menu::setupMenuStyle(bool isDarkTheme, float alpha)
 
 	style = ImGuiStyle();
 	style.Alpha = alpha;
-	style.WindowPadding = ImVec2(10.0f, 10.0f);
-	style.FramePadding = ImVec2(10.0f, 8.0f);
-	style.ItemSpacing = ImVec2(10.0f, 10.0f);
+	style.WindowPadding = ImVec2(12.0f, 12.0f);
+	style.FramePadding = ImVec2(10.0f, 7.0f);
+	style.ItemSpacing = ImVec2(10.0f, 8.0f);
 	style.ItemInnerSpacing = ImVec2(7.0f, 6.0f);
-	style.WindowRounding = 18.0f;
-	style.ChildRounding = 12.0f;
-	style.FrameRounding = 9.0f;
-	style.PopupRounding = 10.0f;
-	style.ScrollbarRounding = 10.0f;
-	style.GrabRounding = 9.0f;
-	style.TabRounding = 9.0f;
+	style.WindowRounding = 16.0f;
+	style.ChildRounding = 10.0f;
+	style.FrameRounding = 8.0f;
+	style.PopupRounding = 8.0f;
+	style.ScrollbarRounding = 8.0f;
+	style.GrabRounding = 6.0f;
+	style.TabRounding = 8.0f;
 	style.WindowBorderSize = 0.0f;
 	style.ChildBorderSize = 1.0f;
 	style.FrameBorderSize = 0.0f;
-	style.WindowTitleAlign = ImVec2(0.08f, 0.5f);
 
-	const ImVec4 accent = isDarkTheme ? ImVec4(0.30f, 0.58f, 1.00f, 1.0f) : ImVec4(0.12f, 0.38f, 0.82f, 1.0f);
-	const ImVec4 accentHover = isDarkTheme ? ImVec4(0.40f, 0.66f, 1.00f, 1.0f) : ImVec4(0.18f, 0.47f, 0.94f, 1.0f);
-	const ImVec4 canvas = canvasColor(isDarkTheme);
-	const ImVec4 panel = isDarkTheme ? ImVec4(0.070f, 0.090f, 0.140f, 1.0f) : ImVec4(0.985f, 0.990f, 0.998f, 1.0f);
-	const ImVec4 frame = isDarkTheme ? ImVec4(0.105f, 0.135f, 0.205f, 1.0f) : ImVec4(0.900f, 0.935f, 0.975f, 1.0f);
+	const ImVec4 accent = ImVec4(0.55f, 0.35f, 0.95f, 1.0f);
+	const ImVec4 accentHover = ImVec4(0.65f, 0.45f, 1.00f, 1.0f);
 
-	style.Colors[ImGuiCol_Text] = isDarkTheme ? ImVec4(0.91f, 0.94f, 0.99f, 1.0f) : ImVec4(0.10f, 0.13f, 0.19f, 1.0f);
-	style.Colors[ImGuiCol_TextDisabled] = isDarkTheme ? ImVec4(0.54f, 0.60f, 0.70f, 1.0f) : ImVec4(0.42f, 0.48f, 0.57f, 1.0f);
-	style.Colors[ImGuiCol_WindowBg] = canvas;
-	style.Colors[ImGuiCol_ChildBg] = panel;
-	style.Colors[ImGuiCol_PopupBg] = panel;
-	style.Colors[ImGuiCol_Border] = isDarkTheme ? ImVec4(0.20f, 0.30f, 0.46f, 0.72f) : ImVec4(0.67f, 0.76f, 0.88f, 0.85f);
-	style.Colors[ImGuiCol_BorderShadow] = ImVec4(0, 0, 0, 0);
-	style.Colors[ImGuiCol_FrameBg] = frame;
-	style.Colors[ImGuiCol_FrameBgHovered] = isDarkTheme ? ImVec4(0.15f, 0.21f, 0.32f, 1.0f) : ImVec4(0.83f, 0.89f, 0.97f, 1.0f);
-	style.Colors[ImGuiCol_FrameBgActive] = isDarkTheme ? ImVec4(0.18f, 0.27f, 0.42f, 1.0f) : ImVec4(0.76f, 0.85f, 0.96f, 1.0f);
-	style.Colors[ImGuiCol_TitleBg] = style.Colors[ImGuiCol_WindowBg];
-	style.Colors[ImGuiCol_TitleBgActive] = style.Colors[ImGuiCol_WindowBg];
-	style.Colors[ImGuiCol_MenuBarBg] = panel;
-	style.Colors[ImGuiCol_ScrollbarBg] = style.Colors[ImGuiCol_WindowBg];
-	style.Colors[ImGuiCol_ScrollbarGrab] = isDarkTheme ? ImVec4(0.22f, 0.34f, 0.48f, 1.0f) : ImVec4(0.64f, 0.73f, 0.84f, 1.0f);
-	style.Colors[ImGuiCol_ScrollbarGrabHovered] = accent;
-	style.Colors[ImGuiCol_ScrollbarGrabActive] = accentHover;
+	style.Colors[ImGuiCol_Text] = ImVec4(0.92f, 0.94f, 0.98f, 1.0f);
+	style.Colors[ImGuiCol_TextDisabled] = ImVec4(0.50f, 0.54f, 0.65f, 1.0f);
+	style.Colors[ImGuiCol_WindowBg] = ImVec4(0.06f, 0.07f, 0.10f, 1.0f);
+	style.Colors[ImGuiCol_ChildBg] = ImVec4(0.09f, 0.10f, 0.15f, 1.0f);
+	style.Colors[ImGuiCol_PopupBg] = ImVec4(0.09f, 0.10f, 0.15f, 1.0f);
+	style.Colors[ImGuiCol_Border] = ImVec4(0.18f, 0.20f, 0.28f, 0.8f);
+	style.Colors[ImGuiCol_FrameBg] = ImVec4(0.12f, 0.14f, 0.20f, 1.0f);
+	style.Colors[ImGuiCol_FrameBgHovered] = ImVec4(0.16f, 0.19f, 0.28f, 1.0f);
+	style.Colors[ImGuiCol_FrameBgActive] = ImVec4(0.20f, 0.24f, 0.35f, 1.0f);
 	style.Colors[ImGuiCol_CheckMark] = accentHover;
 	style.Colors[ImGuiCol_SliderGrab] = accent;
 	style.Colors[ImGuiCol_SliderGrabActive] = accentHover;
-	style.Colors[ImGuiCol_Button] = ImVec4(accent.x, accent.y, accent.z, 0.25f);
-	style.Colors[ImGuiCol_ButtonHovered] = ImVec4(accentHover.x, accentHover.y, accentHover.z, 0.85f);
+	style.Colors[ImGuiCol_Button] = ImVec4(0.14f, 0.16f, 0.24f, 1.0f);
+	style.Colors[ImGuiCol_ButtonHovered] = ImVec4(0.22f, 0.25f, 0.36f, 1.0f);
 	style.Colors[ImGuiCol_ButtonActive] = accent;
-	style.Colors[ImGuiCol_Header] = ImVec4(accent.x, accent.y, accent.z, 0.22f);
-	style.Colors[ImGuiCol_HeaderHovered] = ImVec4(accentHover.x, accentHover.y, accentHover.z, 0.45f);
-	style.Colors[ImGuiCol_HeaderActive] = ImVec4(accent.x, accent.y, accent.z, 0.65f);
 	style.Colors[ImGuiCol_Separator] = style.Colors[ImGuiCol_Border];
-	style.Colors[ImGuiCol_SeparatorHovered] = accentHover;
-	style.Colors[ImGuiCol_SeparatorActive] = accent;
-	style.Colors[ImGuiCol_NavHighlight] = accent;
-	style.Colors[ImGuiCol_TextSelectedBg] = ImVec4(accent.x, accent.y, accent.z, 0.35f);
 }
 
-void Menu::detectSteam()
-{
-	while (this->isMenuOn)
-	{
-		DWORD pID = mem::getProcID(vars::str_steam_process_name.data());
-		g_injector->steamRunning = !(pID == NULL);
-		std::this_thread::sleep_for(1s);
-	}
-}
-
-void Menu::detectGame()
-{
-	while (this->isMenuOn)
-	{
-		DWORD pID = mem::getProcID(vars::str_game_process_name.data());
-		g_injector->csgoRunning = !(pID == NULL);
-		std::this_thread::sleep_for(1s);
-	}
-}
-
-void Menu::updateFiles()
-{
-	if (!std::filesystem::is_directory(vars::str_dll_dir_path) || !std::filesystem::exists(vars::str_dll_dir_path)) { // Check if src folder exists
-		std::filesystem::create_directory(vars::str_dll_dir_path); // create src folder
-	}
-	
-	while (this->isMenuOn)
-	{
-		this->mtx.lock();
-		this->filePaths.clear();
-		for (const auto& file : std::filesystem::directory_iterator(vars::str_dll_dir_path))
-		{
-			if (!std::filesystem::is_directory(file) && (file.path().string().substr(file.path().string().find_last_of(".") + 1) == "dll"))
-				this->filePaths.push_back(file.path().string());
-		}
-		this->mtx.unlock();
-		std::this_thread::sleep_for(1s);
-	}
-}
+void Menu::detectSteam() {}
+void Menu::detectGame() {}
+void Menu::updateFiles() {}

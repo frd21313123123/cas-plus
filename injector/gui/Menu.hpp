@@ -48,6 +48,8 @@ private:
 	std::vector<std::string> filePaths;
 	int selectedProcess{ 0 };
 	int selectedDLL{ 0 };
+	int activeTab{ 0 };
+	int activeSubtab{ 0 };
 
 	std::mutex mtx;
 

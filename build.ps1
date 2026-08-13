@@ -51,7 +51,9 @@ $payloadName = if ($Configuration -eq 'Release') { 'cas-plus-payload.dll' } else
 
 Copy-Item -LiteralPath (Join-Path $injectorOutput $injectorName) -Destination (Join-Path $packageRoot 'cas-plus.exe')
 Copy-Item -LiteralPath (Join-Path $payloadOutput $payloadName) -Destination (Join-Path $packageRoot 'dlls\cas-plus-payload.dll')
-Copy-Item -LiteralPath (Join-Path $projectRoot 'README.md') -Destination $packageRoot
+if (Test-Path (Join-Path $projectRoot 'README.md')) {
+    Copy-Item -LiteralPath (Join-Path $projectRoot 'README.md') -Destination $packageRoot
+}
 Copy-Item -LiteralPath (Join-Path $projectRoot 'THIRD_PARTY_NOTICES.md') -Destination $packageRoot
 
 Write-Host "Package ready: $packageRoot"

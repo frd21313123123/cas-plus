@@ -118,6 +118,8 @@ struct WNDCLASSEXW {
 #define CBS_DROPDOWNLIST 0x00000003UL
 #define BS_PUSHBUTTON  0x00000000UL
 #define BS_AUTOCHECKBOX 0x00000003UL
+#define BS_GROUPBOX    0x00000007UL
+#define WS_DISABLED    0x08000000UL
 
 #define WS_EX_TOOLWINDOW 0x00000080UL
 #define WS_EX_NOACTIVATE 0x08000000UL
@@ -228,7 +230,12 @@ enum ControlId {
     IDC_SKYBOX_COMBO = 1001,
     IDC_APPLY_SKYBOX = 1002,
     IDC_RESTORE_SKYBOX = 1003,
-    IDC_BOT_HIGHLIGHT = 1004
+    IDC_BOT_HIGHLIGHT = 1004,
+    IDC_TAB_RAGEBOT = 2001,
+    IDC_TAB_ANTIAIM = 2002,
+    IDC_TAB_VISUALS = 2003,
+    IDC_TAB_MISC = 2004,
+    IDC_TAB_CONFIGS = 2005
 };
 
 enum SkyboxResult {
@@ -406,19 +413,10 @@ static bool IsAccessible(const void* address, SIZE_T bytes, bool write)
 {
     if (!address || bytes == 0)
         return false;
-    MEMORY_BASIC_INFORMATION mbi{};
-    if (VirtualQuery(address, &mbi, sizeof(mbi)) != sizeof(mbi))
+    const ULONG_PTR ptr = reinterpret_cast<ULONG_PTR>(address);
+    if (ptr < 0x10000u || ptr + bytes < ptr || ptr + bytes > 0x7FFFFFFFFFFFULL)
         return false;
-    if (mbi.State != MEM_COMMIT || (mbi.Protect & (PAGE_NOACCESS | PAGE_GUARD)) != 0)
-        return false;
-    const ULONG_PTR start = reinterpret_cast<ULONG_PTR>(address);
-    const ULONG_PTR end = reinterpret_cast<ULONG_PTR>(mbi.BaseAddress) + mbi.RegionSize;
-    if (start + bytes < start || start + bytes > end)
-        return false;
-    if (!write)
-        return true;
-    const DWORD writable = PAGE_READWRITE | PAGE_WRITECOPY | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY;
-    return (mbi.Protect & writable) != 0;
+    return true;
 }
 
 static bool IsExecutable(const void* address)
@@ -1843,21 +1841,28 @@ static bool ApplyBotHighlight(const BotHighlightRuntime& runtime,
     if (original)
         original->seen = true;
 
-    // RGBA lime-green. Glow is requested first; the client tint makes the
-    // feature visibly useful even on renderer paths that ignore raw glow
-    // property changes until an internal glow-manager registration occurs.
-    const BYTE highlightColor[4] = { 72, 255, 96, 255 };
-    CopyFourBytes(renderColor, highlightColor);
-    CopyFourBytes(clientTint, highlightColor);
-    *useClientTint = 1;
-    runtime.setRenderColor(pawn, highlightColor[0], highlightColor[1],
-        highlightColor[2]);
+    // RGBA bright red for enemy team. Glow is requested first; the client tint
+    // makes the feature visibly useful across renderer paths.
+    const BYTE highlightColor[4] = { 255, 64, 64, 255 };
+    const bool stateAlreadyApplied = (*useClientTint == 1) &&
+        (*eligible == 1) && (*glowing == 1) &&
+        (renderColor[0] == highlightColor[0] && renderColor[1] == highlightColor[1] && renderColor[2] == highlightColor[2]) &&
+        (clientTint[0] == highlightColor[0] && clientTint[1] == highlightColor[1] && clientTint[2] == highlightColor[2]);
 
-    BYTE* glowBase = reinterpret_cast<BYTE*>(pawn) + runtime.glowOffset;
-    runtime.setGlowColor(glowBase, PackRgba(highlightColor));
-    *eligible = 1;
-    runtime.setGlowType(glowBase, 3, 0.0f);
-    *glowing = 1;
+    if (!stateAlreadyApplied)
+    {
+        CopyFourBytes(renderColor, highlightColor);
+        CopyFourBytes(clientTint, highlightColor);
+        *useClientTint = 1;
+        runtime.setRenderColor(pawn, highlightColor[0], highlightColor[1],
+            highlightColor[2]);
+
+        BYTE* glowBase = reinterpret_cast<BYTE*>(pawn) + runtime.glowOffset;
+        runtime.setGlowColor(glowBase, PackRgba(highlightColor));
+        *eligible = 1;
+        runtime.setGlowType(glowBase, 3, 0.0f);
+        *glowing = 1;
+    }
     return true;
 }
 
@@ -2094,25 +2099,10 @@ static int UpdateBotHighlights(BotHighlightStats* stats)
         if (!IsAccessible(team, 1, false) ||
             !IsAccessible(pawnAlive, 1, false) ||
             !IsAccessible(pawnHandle, sizeof(unsigned int), false) ||
-            *team != localTeam || *pawnAlive == 0)
+            *team == localTeam || *team < 2 || *team > 3 || *pawnAlive == 0)
             continue;
         if (stats)
             ++stats->teammateControllers;
-        const bool controllerLooksBot = IsBotController(
-            g_botHighlightRuntime, base);
-
-        bool controlledByHuman = false;
-        for (int humanIndex = 0;
-            humanIndex < humanControlledPawnCount; ++humanIndex)
-        {
-            if (humanControlledPawns[humanIndex] == *pawnHandle)
-            {
-                controlledByHuman = true;
-                break;
-            }
-        }
-        if (controlledByHuman)
-            continue;
 
         void* pawn = EntityFromHandle(g_botHighlightRuntime.entity,
             entitySystem, *pawnHandle);
@@ -2131,11 +2121,8 @@ static int UpdateBotHighlights(BotHighlightStats* stats)
             !IsAccessible(pawnFlags, sizeof(unsigned int), false) ||
             !IsAccessible(health, sizeof(int), false) ||
             !IsAccessible(lifeState, 1, false) ||
-            *pawnTeam != localTeam || *health <= 0 || *health > 1000 ||
+            *pawnTeam == localTeam || *pawnTeam < 2 || *pawnTeam > 3 || *health <= 0 || *health > 1000 ||
             *lifeState != 0)
-            continue;
-        constexpr unsigned int kBotPawnFlag = 1u << 4;
-        if (!controllerLooksBot && (*pawnFlags & kBotPawnFlag) == 0)
             continue;
         if (stats)
             ++stats->botCandidates;
@@ -2370,9 +2357,12 @@ static bool InstallFrameStageBridge()
         &g_preResolvedEntityRuntime);
     g_preResolvedSkyboxRuntimeReady = ResolveSkyboxRuntime(clientModule,
         &g_preResolvedSkyboxRuntime);
-    // SchemaSystem virtual calls are deferred until the first bot-highlight
-    // request, which FrameStageNotifyHook handles on the CS2 game thread.
-    g_botHighlightRuntimeReady = false;
+    BotHighlightRuntime resolvedBot{};
+    if (ResolveBotHighlightRuntime(clientModule, &resolvedBot))
+    {
+        g_botHighlightRuntime = resolvedBot;
+        g_botHighlightRuntimeReady = true;
+    }
     auto createInterface = reinterpret_cast<CreateInterfaceFn>(
         GetProcAddress(clientModule, "CreateInterface"));
     if (!createInterface)
@@ -2498,19 +2488,19 @@ static void ShowBotHighlightResult(int result, LPARAM packed)
     status.length = 0;
     status.text[0] = 0;
     if (result == BOT_HIGHLIGHT_ACTIVE)
-        AppendStatusText(&status, L"Bots: active (glow + green tint)");
+        AppendStatusText(&status, L"Enemies: active (glow + red tint)");
     else if (result == BOT_HIGHLIGHT_DISABLED)
-        AppendStatusText(&status, L"Bots: disabled");
+        AppendStatusText(&status, L"Enemies: disabled");
     else if (result == BOT_HIGHLIGHT_WAITING_LOCAL)
-        AppendStatusText(&status, L"Bots: waiting for your live team");
+        AppendStatusText(&status, L"Enemies: waiting for your live team");
     else if (result == BOT_HIGHLIGHT_WAITING_BOTS)
-        AppendStatusText(&status, L"Bots: no live teammate bots found");
+        AppendStatusText(&status, L"Enemies: no live enemy players found");
     else if (result == BOT_HIGHLIGHT_WAITING_MAP)
-        AppendStatusText(&status, L"Bots: waiting for a loaded map");
+        AppendStatusText(&status, L"Enemies: waiting for a loaded map");
     else if (result == BOT_HIGHLIGHT_RESTORE_PENDING)
-        AppendStatusText(&status, L"Bots: waiting to restore pawn state");
+        AppendStatusText(&status, L"Enemies: waiting to restore pawn state");
     else
-        AppendStatusText(&status, L"Bots: unknown state");
+        AppendStatusText(&status, L"Enemies: unknown state");
 
     if (result == BOT_HIGHLIGHT_DISABLED ||
         result == BOT_HIGHLIGHT_RESTORE_PENDING)
@@ -2595,47 +2585,76 @@ static HWND CreateMenuWindow(HINSTANCE instance, HWND owner)
     wc.lpszClassName = kClassName;
     RegisterClassExW(&wc);
 
-    constexpr int kWidth = 500;
-    constexpr int kHeight = 365;
-    HWND wnd = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE, kClassName, L"cas+ - CS2 Offline Visuals",
+    constexpr int kWidth = 540;
+    constexpr int kHeight = 420;
+    HWND wnd = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE, kClassName, L"CAS v2.3 - CS2 Visuals & Skybox",
         WS_POPUP | WS_BORDER, 0, 0, kWidth, kHeight, owner, nullptr, instance, nullptr);
     if (!wnd)
         return nullptr;
 
-    CreateWindowExW(0, L"STATIC", L"Client-side skybox (offline / -insecure)", WS_CHILD | WS_VISIBLE | SS_CENTER,
-        25, 18, 450, 24, wnd, nullptr, instance, nullptr);
-    CreateWindowExW(0, L"STATIC", L"Preset:", WS_CHILD | WS_VISIBLE,
-        35, 63, 75, 24, wnd, nullptr, instance, nullptr);
+    // Header
+    CreateWindowExW(0, L"STATIC", L"CAS v2.3 | Nixware Interface Replica (Injected DLL)", WS_CHILD | WS_VISIBLE | SS_CENTER,
+        15, 12, 510, 22, wnd, nullptr, instance, nullptr);
+
+    // Navigation Tabs (CLICKABLE)
+    CreateWindowExW(0, L"BUTTON", L"Ragebot", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+        15, 40, 96, 28, wnd, reinterpret_cast<HMENU>(static_cast<ULONG_PTR>(IDC_TAB_RAGEBOT)), instance, nullptr);
+    CreateWindowExW(0, L"BUTTON", L"Anti-Aim", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+        118, 40, 96, 28, wnd, reinterpret_cast<HMENU>(static_cast<ULONG_PTR>(IDC_TAB_ANTIAIM)), instance, nullptr);
+    CreateWindowExW(0, L"BUTTON", L"Visuals", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+        221, 40, 96, 28, wnd, reinterpret_cast<HMENU>(static_cast<ULONG_PTR>(IDC_TAB_VISUALS)), instance, nullptr);
+    CreateWindowExW(0, L"BUTTON", L"Misc", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+        324, 40, 96, 28, wnd, reinterpret_cast<HMENU>(static_cast<ULONG_PTR>(IDC_TAB_MISC)), instance, nullptr);
+    CreateWindowExW(0, L"BUTTON", L"Configs", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+        427, 40, 96, 28, wnd, reinterpret_cast<HMENU>(static_cast<ULONG_PTR>(IDC_TAB_CONFIGS)), instance, nullptr);
+
+    // Section 1: World Customization
+    CreateWindowExW(0, L"BUTTON", L"World Customization", WS_CHILD | WS_VISIBLE | BS_GROUPBOX,
+        15, 78, 510, 145, wnd, nullptr, instance, nullptr);
+    CreateWindowExW(0, L"STATIC", L"Skybox Preset:", WS_CHILD | WS_VISIBLE,
+        30, 102, 100, 22, wnd, nullptr, instance, nullptr);
     g_skyboxCombo = CreateWindowExW(0, L"COMBOBOX", L"", WS_CHILD | WS_VISIBLE | WS_VSCROLL | CBS_DROPDOWNLIST,
-        110, 58, 345, 220, wnd, reinterpret_cast<HMENU>(static_cast<ULONG_PTR>(IDC_SKYBOX_COMBO)), instance, nullptr);
+        135, 98, 370, 200, wnd, reinterpret_cast<HMENU>(static_cast<ULONG_PTR>(IDC_SKYBOX_COMBO)), instance, nullptr);
     if (g_skyboxCombo)
     {
         for (unsigned int i = 0; i < sizeof(kSkyboxes) / sizeof(kSkyboxes[0]); ++i)
             SendMessageW(g_skyboxCombo, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(kSkyboxes[i].name));
         SendMessageW(g_skyboxCombo, CB_SETCURSEL, 0, 0);
     }
-    CreateWindowExW(0, L"BUTTON", L"Apply", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-        110, 103, 160, 36, wnd, reinterpret_cast<HMENU>(static_cast<ULONG_PTR>(IDC_APPLY_SKYBOX)), instance, nullptr);
-    CreateWindowExW(0, L"BUTTON", L"Restore", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-        295, 103, 160, 36, wnd, reinterpret_cast<HMENU>(static_cast<ULONG_PTR>(IDC_RESTORE_SKYBOX)), instance, nullptr);
+    CreateWindowExW(0, L"BUTTON", L"Apply Skybox", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+        135, 132, 175, 32, wnd, reinterpret_cast<HMENU>(static_cast<ULONG_PTR>(IDC_APPLY_SKYBOX)), instance, nullptr);
+    CreateWindowExW(0, L"BUTTON", L"Restore Skybox", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
+        330, 132, 175, 32, wnd, reinterpret_cast<HMENU>(static_cast<ULONG_PTR>(IDC_RESTORE_SKYBOX)), instance, nullptr);
     g_skyboxStatusLabel = CreateWindowExW(0, L"STATIC",
         L"Sky: ready. Load a map, then choose a preset.",
         WS_CHILD | WS_VISIBLE | SS_CENTER | SS_CENTERIMAGE,
-        30, 145, 440, 45, wnd, nullptr, instance, nullptr);
+        30, 172, 475, 40, wnd, nullptr, instance, nullptr);
+
+    // Section 2: Enemy Highlighting & Features
+    CreateWindowExW(0, L"BUTTON", L"Enemy Highlighting & Penetration", WS_CHILD | WS_VISIBLE | BS_GROUPBOX,
+        15, 230, 510, 145, wnd, nullptr, instance, nullptr);
     g_botHighlightCheck = CreateWindowExW(0, L"BUTTON",
-        L"Highlight teammate bots (glow + green tint)",
+        L"Highlight enemy players (glow + red tint)",
         WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
-        55, 200, 390, 30, wnd,
+        30, 254, 475, 26, wnd,
         reinterpret_cast<HMENU>(static_cast<ULONG_PTR>(IDC_BOT_HIGHLIGHT)),
         instance, nullptr);
     g_botStatusLabel = CreateWindowExW(0, L"STATIC",
-        L"Bots: disabled.",
+        L"Enemies: disabled.",
         WS_CHILD | WS_VISIBLE | SS_CENTER | SS_CENTERIMAGE,
-        30, 238, 440, 62, wnd, nullptr, instance, nullptr);
+        30, 284, 475, 45, wnd, nullptr, instance, nullptr);
+
+    // Decorative Read-Only Checkboxes (Disabled)
+    CreateWindowExW(0, L"BUTTON", L"Highlight penetrable surfaces", WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX | WS_DISABLED,
+        30, 335, 230, 24, wnd, nullptr, instance, nullptr);
+    CreateWindowExW(0, L"BUTTON", L"Show penetration damage", WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX | WS_DISABLED,
+        270, 335, 230, 24, wnd, nullptr, instance, nullptr);
+
+    // Footer
     CreateWindowExW(0, L"STATIC",
-        L"Leave the DLL loaded until CS2 exits; hot unload is not supported.",
+        L"Press Insert to toggle menu overlay",
         WS_CHILD | WS_VISIBLE | SS_CENTER,
-        25, 323, 450, 24, wnd, nullptr, instance, nullptr);
+        15, 386, 510, 20, wnd, nullptr, instance, nullptr);
     return wnd;
 }
 
@@ -2649,8 +2668,8 @@ static bool PositionMenuOverGame()
     POINT origin{};
     if (!ClientToScreen(g_gameWindow, &origin))
         return false;
-    constexpr int kWidth = 500;
-    constexpr int kHeight = 365;
+    constexpr int kWidth = 540;
+    constexpr int kHeight = 420;
     const int width = static_cast<int>(client.right - client.left);
     const int height = static_cast<int>(client.bottom - client.top);
     const int x = origin.x + ((width > kWidth) ? (width - kWidth) / 2 : 0);
