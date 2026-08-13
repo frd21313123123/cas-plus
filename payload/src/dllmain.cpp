@@ -1,6 +1,7 @@
-// cas+ payload 4.2.0 - x64 manual-map friendly CS2 skybox UI.
-// INSERT toggles an owned Win32 window. The selected built-in .vmat is applied
-// to client-side C_EnvSky entities; no DirectX hook or input automation is used.
+// cas+ payload 4.3.0 - x64 manual-map friendly CS2 offline visuals UI.
+// INSERT toggles an owned Win32 window. Skybox requests and reversible teammate
+// bot highlighting are dispatched to the CS2 game thread; no DirectX hook or
+// input automation is used.
 
 using BOOL = int;
 using BYTE = unsigned char;
@@ -65,6 +66,8 @@ using ForceSkyboxUpdateFn = void* (*)(void*);
 using AssignStrongHandleFn = void (*)(void*, void*);
 using FrameStageNotifyFn = void (*)(void*, int);
 using PreCacheFn = void* (*)(void*, void*, const char*);
+using FindTypeScopeForModuleFn = void* (*)(void*, const char*, const char**);
+using FindDeclaredClassFn = void (*)(void*, void**, const char*);
 
 struct WNDCLASSEXW {
     UINT cbSize;
@@ -89,6 +92,7 @@ struct WNDCLASSEXW {
 #define WM_COMMAND 0x0111
 #define WM_APP 0x8000
 #define WM_POTATO_STATUS (WM_APP + 0x453)
+#define WM_CAS_BOT_STATUS (WM_APP + 0x454)
 #define PM_REMOVE 0x0001
 
 #define FRAME_RENDER_PASS 12
@@ -105,6 +109,7 @@ struct WNDCLASSEXW {
 #define SS_CENTERIMAGE 0x00000200UL
 #define CBS_DROPDOWNLIST 0x00000003UL
 #define BS_PUSHBUTTON  0x00000000UL
+#define BS_AUTOCHECKBOX 0x00000003UL
 
 #define WS_EX_TOOLWINDOW 0x00000080UL
 #define WS_EX_NOACTIVATE 0x08000000UL
@@ -119,6 +124,10 @@ struct WNDCLASSEXW {
 #define CB_SETCURSEL  0x014E
 #define CB_ERR (-1)
 #define BN_CLICKED 0
+#define BM_GETCHECK 0x00F0
+#define BM_SETCHECK 0x00F1
+#define BST_UNCHECKED 0
+#define BST_CHECKED 1
 
 #define MEM_COMMIT 0x1000
 #define PAGE_NOACCESS 0x01
@@ -176,10 +185,12 @@ static volatile bool g_running = true;
 static HWND g_gameWindow = nullptr;
 static HWND g_menuWindow = nullptr;
 static HWND g_skyboxCombo = nullptr;
+static HWND g_botHighlightCheck = nullptr;
 static HWND g_statusLabel = nullptr;
 static bool g_menuRequested = false;
 static bool g_menuActuallyShown = false;
 static volatile LONG g_pendingSkyboxRequest = 0;
+static volatile LONG g_pendingBotHighlightRequest = 0;
 static void** g_frameStageVtableSlot = nullptr;
 static FrameStageNotifyFn g_originalFrameStageNotify = nullptr;
 
@@ -207,7 +218,8 @@ static void* AtomicCompareExchangePointer(void** destination, void* desired,
 enum ControlId {
     IDC_SKYBOX_COMBO = 1001,
     IDC_APPLY_SKYBOX = 1002,
-    IDC_RESTORE_SKYBOX = 1003
+    IDC_RESTORE_SKYBOX = 1003,
+    IDC_BOT_HIGHLIGHT = 1004
 };
 
 enum SkyboxResult {
@@ -222,6 +234,70 @@ enum SkyboxResult {
     SKYBOX_ERR_DISPATCH = -7,
     SKYBOX_ERR_NOTHING_TO_RESTORE = -8
 };
+
+enum BotHighlightResult {
+    BOT_HIGHLIGHT_ACTIVE = 1,
+    BOT_HIGHLIGHT_DISABLED = 2,
+    BOT_HIGHLIGHT_WAITING_LOCAL = 3,
+    BOT_HIGHLIGHT_WAITING_BOTS = 4,
+    BOT_HIGHLIGHT_WAITING_MAP = 5,
+    BOT_HIGHLIGHT_RESTORE_PENDING = 6,
+    BOT_HIGHLIGHT_ERR_SCHEMA = -1,
+    BOT_HIGHLIGHT_ERR_RUNTIME = -2
+};
+
+struct EntityRuntime {
+    void** entitySystemGlobal;
+    unsigned int highestEntityOffset;
+};
+
+struct BotHighlightRuntime {
+    EntityRuntime entity;
+    unsigned int teamOffset;
+    unsigned int flagsOffset;
+    unsigned int healthOffset;
+    unsigned int lifeStateOffset;
+    unsigned int localControllerOffset;
+    unsigned int playerPawnHandleOffset;
+    unsigned int pawnAliveOffset;
+    unsigned int controllingBotOffset;
+    unsigned int glowOffset;
+    unsigned int clientTintOffset;
+    unsigned int useClientTintOffset;
+    unsigned int glowColorOffset;
+    unsigned int glowEligibleOffset;
+    unsigned int glowingOffset;
+};
+
+struct BotHighlightStats {
+    int highlighted;
+    int restored;
+};
+
+struct OriginalBotHighlight {
+    unsigned int pawnHandle;
+    void* pawnAddress;
+    void* identityAddress;
+    void* pawnVtable;
+    BYTE glowColor[4];
+    BYTE clientTint[4];
+    BYTE glowing;
+    BYTE eligible;
+    BYTE useClientTint;
+    bool seen;
+};
+
+static BotHighlightRuntime g_botHighlightRuntime{};
+static OriginalBotHighlight g_originalBotHighlights[64]{};
+static int g_originalBotHighlightCount = 0;
+static bool g_botHighlightRuntimeReady = false;
+static bool g_botHighlightEnabled = false;
+static bool g_botHighlightRestorePending = false;
+static unsigned int g_botHighlightFrameCounter = 0;
+static int g_lastBotHighlightResult = 0;
+static void* g_lastBotEntitySystem = nullptr;
+static EntityRuntime g_preResolvedEntityRuntime{};
+static bool g_preResolvedEntityRuntimeReady = false;
 
 struct SkyboxRuntime {
     void* entitySystem;
@@ -424,6 +500,171 @@ static void SetStatus(const wchar_t* text)
 {
     if (g_statusLabel)
         SetWindowTextW(g_statusLabel, text);
+}
+
+struct SchemaClassFieldView {
+    const char* name;
+    void* type;
+    int offset;
+    int metadataCount;
+    void* metadata;
+};
+
+struct SchemaClassInfoView {
+    void* binding;
+    const char* name;
+    const char* binaryName;
+    const char* moduleName;
+    int size;
+    short fieldCount;
+    short staticMetadataCount;
+    BYTE layout[8];
+    SchemaClassFieldView* fields;
+};
+
+static_assert(sizeof(SchemaClassFieldView) == 0x20,
+    "SchemaClassFieldView layout changed");
+static_assert(sizeof(SchemaClassInfoView) == 0x38,
+    "SchemaClassInfoView layout changed");
+
+static bool ResolveClientSchemaScope(void** scope)
+{
+    if (!scope)
+        return false;
+    *scope = nullptr;
+    HMODULE schemaModule = GetModuleHandleW(L"schemasystem.dll");
+    if (!schemaModule)
+        return false;
+    auto createInterface = reinterpret_cast<CreateInterfaceFn>(
+        GetProcAddress(schemaModule, "CreateInterface"));
+    if (!createInterface)
+        return false;
+    void* schemaSystem = createInterface("SchemaSystem_001", nullptr);
+    if (!IsAccessible(schemaSystem, sizeof(void*), false))
+        return false;
+    void** vtable = *reinterpret_cast<void***>(schemaSystem);
+    if (!IsAccessible(vtable, 14 * sizeof(void*), false) ||
+        !IsExecutable(vtable[13]))
+        return false;
+    auto findTypeScope = reinterpret_cast<FindTypeScopeForModuleFn>(vtable[13]);
+    void* clientScope = findTypeScope(schemaSystem, "client.dll", nullptr);
+    if (!IsAccessible(clientScope, sizeof(void*), false))
+        return false;
+    void** scopeVtable = *reinterpret_cast<void***>(clientScope);
+    if (!IsAccessible(scopeVtable, 3 * sizeof(void*), false) ||
+        !IsExecutable(scopeVtable[2]))
+        return false;
+    *scope = clientScope;
+    return true;
+}
+
+static SchemaClassInfoView* FindSchemaClass(void* scope,
+    const char* className)
+{
+    if (!scope || !className ||
+        !IsAccessible(scope, sizeof(void*), false))
+        return nullptr;
+    void** vtable = *reinterpret_cast<void***>(scope);
+    if (!IsAccessible(vtable, 3 * sizeof(void*), false) ||
+        !IsExecutable(vtable[2]))
+        return nullptr;
+
+    // The current Source 2 SDK wrapper exposes its one-pointer schema handle
+    // through caller-provided return storage on Windows x64.
+    void* classInfoRaw = nullptr;
+    auto findDeclaredClass = reinterpret_cast<FindDeclaredClassFn>(vtable[2]);
+    findDeclaredClass(scope, &classInfoRaw, className);
+    auto* classInfo = reinterpret_cast<SchemaClassInfoView*>(classInfoRaw);
+    if (!IsAccessible(classInfo, sizeof(SchemaClassInfoView), false) ||
+        classInfo->size <= 0 || classInfo->size > 0x20000 ||
+        classInfo->fieldCount <= 0 || classInfo->fieldCount > 2048 ||
+        !IsAccessible(classInfo->name, 64, false) ||
+        !AsciiEquals(classInfo->name, className))
+        return nullptr;
+    const SIZE_T fieldsSize = static_cast<SIZE_T>(classInfo->fieldCount) *
+        sizeof(SchemaClassFieldView);
+    if (!IsAccessible(classInfo->fields, fieldsSize, false))
+        return nullptr;
+    return classInfo;
+}
+
+static bool FindSchemaField(const SchemaClassInfoView* classInfo,
+    const char* fieldName, unsigned int* offset)
+{
+    if (!classInfo || !fieldName || !offset)
+        return false;
+    for (int i = 0; i < classInfo->fieldCount; ++i)
+    {
+        const SchemaClassFieldView& field = classInfo->fields[i];
+        if (!IsAccessible(field.name, 64, false) ||
+            !AsciiEquals(field.name, fieldName))
+            continue;
+        if (field.offset < 0 || field.offset >= classInfo->size)
+            return false;
+        *offset = static_cast<unsigned int>(field.offset);
+        return true;
+    }
+    return false;
+}
+
+static bool ResolveEntityRuntime(HMODULE clientModule, EntityRuntime* runtime)
+{
+    if (!clientModule || !runtime)
+        return false;
+    static const int kEntitySystemPattern[] = {
+        0x48, 0x8B, 0x1D, -1, -1, -1, -1,
+        0x48, 0x89, 0x1D, -1, -1, -1, -1,
+        0x4C, 0x63, 0xB3
+    };
+    static const int kHighestEntityPattern[] = {
+        0xFF, 0x81, -1, -1, -1, -1, 0x48, 0x85, 0xD2
+    };
+    BYTE* entityMatch = FindUniquePattern(clientModule, kEntitySystemPattern,
+        sizeof(kEntitySystemPattern) / sizeof(kEntitySystemPattern[0]));
+    BYTE* highestMatch = FindUniquePattern(clientModule, kHighestEntityPattern,
+        sizeof(kHighestEntityPattern) / sizeof(kHighestEntityPattern[0]));
+    if (!entityMatch || !highestMatch)
+        return false;
+    const int entityRelative = *reinterpret_cast<int*>(entityMatch + 3);
+    void** entitySystemGlobal = reinterpret_cast<void**>(
+        entityMatch + 7 + entityRelative);
+    const unsigned int highestOffset =
+        *reinterpret_cast<unsigned int*>(highestMatch + 2);
+    if (!IsAccessible(entitySystemGlobal, sizeof(void*), false) ||
+        highestOffset < 0x100 || highestOffset > 0x10000)
+        return false;
+    runtime->entitySystemGlobal = entitySystemGlobal;
+    runtime->highestEntityOffset = highestOffset;
+    return true;
+}
+
+static void* CurrentEntitySystem(const EntityRuntime& runtime)
+{
+    if (!runtime.entitySystemGlobal ||
+        !IsAccessible(runtime.entitySystemGlobal, sizeof(void*), false))
+        return nullptr;
+    void* entitySystem = *runtime.entitySystemGlobal;
+    if (!IsAccessible(reinterpret_cast<BYTE*>(entitySystem) +
+        runtime.highestEntityOffset, sizeof(int), false))
+        return nullptr;
+    return entitySystem;
+}
+
+static void* EntityAtIndex(void* entitySystem, int index)
+{
+    if (!entitySystem || index < 0 || index > 32768)
+        return nullptr;
+    BYTE* chunkAddress = reinterpret_cast<BYTE*>(entitySystem) + 0x10 +
+        8ull * static_cast<unsigned int>(index >> 9);
+    if (!IsAccessible(chunkAddress, sizeof(void*), false))
+        return nullptr;
+    void* chunk = *reinterpret_cast<void**>(chunkAddress);
+    const SIZE_T entityOffset = 0x78ull *
+        static_cast<unsigned int>(index & 0x1FF);
+    BYTE* entityAddress = reinterpret_cast<BYTE*>(chunk) + entityOffset;
+    if (!IsAccessible(entityAddress, sizeof(void*), false))
+        return nullptr;
+    return *reinterpret_cast<void**>(entityAddress);
 }
 
 static unsigned int AsciiLength(const char* text, unsigned int limit)
@@ -643,6 +884,76 @@ static unsigned int EntityHandleFor(void* entity)
     if (!IsAccessible(identity, 0x14, false))
         return 0xFFFFFFFFu;
     return *reinterpret_cast<unsigned int*>(reinterpret_cast<BYTE*>(identity) + 0x10);
+}
+
+static bool HasDesignerName(void* entity, const char* expected)
+{
+    if (!entity || !expected || !IsAccessible(entity, 0x18, false))
+        return false;
+    void* identity = *reinterpret_cast<void**>(
+        reinterpret_cast<BYTE*>(entity) + 0x10);
+    if (!IsAccessible(identity, 0x28, false))
+        return false;
+    const char* designerName = *reinterpret_cast<const char**>(
+        reinterpret_cast<BYTE*>(identity) + 0x20);
+    return IsAccessible(designerName, 64, false) &&
+        AsciiEquals(designerName, expected);
+}
+
+static void* EntityFromHandle(void* entitySystem, unsigned int handle)
+{
+    constexpr unsigned int kEntityIndexMask = 0x7FFFu;
+    if (!entitySystem || handle == 0 || handle == 0xFFFFFFFFu)
+        return nullptr;
+    const unsigned int index = handle & kEntityIndexMask;
+    if (index == kEntityIndexMask || index > 32768u)
+        return nullptr;
+    void* entity = EntityAtIndex(entitySystem, static_cast<int>(index));
+    if (!entity || EntityHandleFor(entity) != handle)
+        return nullptr;
+    return entity;
+}
+
+enum EntityHandleResolveResult {
+    ENTITY_HANDLE_RESOLVED = 1,
+    ENTITY_HANDLE_STALE = 0,
+    ENTITY_HANDLE_RETRY = -1
+};
+
+static int ResolveEntityHandle(void* entitySystem, unsigned int handle,
+    void** resolved)
+{
+    constexpr unsigned int kEntityIndexMask = 0x7FFFu;
+    if (resolved)
+        *resolved = nullptr;
+    if (!entitySystem || !resolved)
+        return ENTITY_HANDLE_RETRY;
+    if (handle == 0 || handle == 0xFFFFFFFFu)
+        return ENTITY_HANDLE_STALE;
+    const unsigned int index = handle & kEntityIndexMask;
+    if (index == kEntityIndexMask || index > 32768u)
+        return ENTITY_HANDLE_STALE;
+    BYTE* chunkAddress = reinterpret_cast<BYTE*>(entitySystem) + 0x10 +
+        8ull * static_cast<unsigned int>(index >> 9);
+    if (!IsAccessible(chunkAddress, sizeof(void*), false))
+        return ENTITY_HANDLE_RETRY;
+    void* chunk = *reinterpret_cast<void**>(chunkAddress);
+    if (!chunk)
+        return ENTITY_HANDLE_STALE;
+    BYTE* entityAddress = reinterpret_cast<BYTE*>(chunk) + 0x78ull *
+        static_cast<unsigned int>(index & 0x1FF);
+    if (!IsAccessible(entityAddress, sizeof(void*), false))
+        return ENTITY_HANDLE_RETRY;
+    void* entity = *reinterpret_cast<void**>(entityAddress);
+    if (!entity)
+        return ENTITY_HANDLE_STALE;
+    const unsigned int currentHandle = EntityHandleFor(entity);
+    if (currentHandle == 0xFFFFFFFFu)
+        return ENTITY_HANDLE_RETRY;
+    if (currentHandle != handle)
+        return ENTITY_HANDLE_STALE;
+    *resolved = entity;
+    return ENTITY_HANDLE_RESOLVED;
 }
 
 struct StrongHandleAssignmentTarget {
@@ -1045,6 +1356,445 @@ static int RestoreSkyboxOnGameThread(SkyboxApplyStats* stats)
     return ApplyToEnvSky(true, nullptr, stats);
 }
 
+static bool ResolveBotHighlightRuntime(BotHighlightRuntime* runtime)
+{
+    if (!runtime)
+        return false;
+    void* scope = nullptr;
+    if (!g_preResolvedEntityRuntimeReady ||
+        !g_preResolvedEntityRuntime.entitySystemGlobal ||
+        !ResolveClientSchemaScope(&scope))
+        return false;
+    runtime->entity = g_preResolvedEntityRuntime;
+
+    SchemaClassInfoView* baseEntity = FindSchemaClass(scope, "C_BaseEntity");
+    SchemaClassInfoView* baseController = FindSchemaClass(scope,
+        "CBasePlayerController");
+    SchemaClassInfoView* playerController = FindSchemaClass(scope,
+        "CCSPlayerController");
+    SchemaClassInfoView* baseModelEntity = FindSchemaClass(scope,
+        "C_BaseModelEntity");
+    SchemaClassInfoView* glowProperty = FindSchemaClass(scope,
+        "CGlowProperty");
+    if (!baseEntity || !baseController || !playerController ||
+        !baseModelEntity || !glowProperty)
+        return false;
+
+    if (!FindSchemaField(baseEntity, "m_iTeamNum", &runtime->teamOffset) ||
+        !FindSchemaField(baseEntity, "m_fFlags", &runtime->flagsOffset) ||
+        !FindSchemaField(baseEntity, "m_iHealth", &runtime->healthOffset) ||
+        !FindSchemaField(baseEntity, "m_lifeState", &runtime->lifeStateOffset) ||
+        !FindSchemaField(baseController, "m_bIsLocalPlayerController",
+            &runtime->localControllerOffset) ||
+        !FindSchemaField(playerController, "m_hPlayerPawn",
+            &runtime->playerPawnHandleOffset) ||
+        !FindSchemaField(playerController, "m_bPawnIsAlive",
+            &runtime->pawnAliveOffset) ||
+        !FindSchemaField(playerController, "m_bControllingBot",
+            &runtime->controllingBotOffset) ||
+        !FindSchemaField(baseModelEntity, "m_Glow", &runtime->glowOffset) ||
+        !FindSchemaField(baseModelEntity, "m_ClientOverrideTint",
+            &runtime->clientTintOffset) ||
+        !FindSchemaField(baseModelEntity, "m_bUseClientOverrideTint",
+            &runtime->useClientTintOffset) ||
+        !FindSchemaField(glowProperty, "m_glowColorOverride",
+            &runtime->glowColorOffset) ||
+        !FindSchemaField(glowProperty, "m_bEligibleForScreenHighlight",
+            &runtime->glowEligibleOffset) ||
+        !FindSchemaField(glowProperty, "m_bGlowing",
+            &runtime->glowingOffset))
+        return false;
+
+    // Cross-check the reflected relationships before any write. The exact
+    // offsets may move, but these field sizes/orderings are structural.
+    if (runtime->teamOffset >= runtime->flagsOffset ||
+        runtime->healthOffset >= runtime->lifeStateOffset ||
+        (runtime->healthOffset & 3u) != 0 ||
+        (runtime->flagsOffset & 3u) != 0 ||
+        runtime->localControllerOffset >= runtime->playerPawnHandleOffset ||
+        (runtime->playerPawnHandleOffset & 3u) != 0 ||
+        runtime->playerPawnHandleOffset + sizeof(unsigned int) >
+            runtime->pawnAliveOffset ||
+        runtime->glowColorOffset + 4 > runtime->glowEligibleOffset ||
+        runtime->glowingOffset != runtime->glowEligibleOffset + 1 ||
+        runtime->clientTintOffset + 4 > runtime->useClientTintOffset ||
+        runtime->playerPawnHandleOffset + sizeof(unsigned int) >
+            static_cast<unsigned int>(playerController->size) ||
+        runtime->pawnAliveOffset >=
+            static_cast<unsigned int>(playerController->size) ||
+        runtime->controllingBotOffset >=
+            static_cast<unsigned int>(playerController->size) ||
+        runtime->glowOffset + runtime->glowingOffset >=
+            static_cast<unsigned int>(baseModelEntity->size) ||
+        runtime->clientTintOffset + 4 >
+            static_cast<unsigned int>(baseModelEntity->size) ||
+        runtime->useClientTintOffset >=
+            static_cast<unsigned int>(baseModelEntity->size))
+        return false;
+    return true;
+}
+
+static OriginalBotHighlight* FindOriginalBotHighlight(
+    unsigned int pawnHandle)
+{
+    for (int i = 0; i < g_originalBotHighlightCount; ++i)
+        if (g_originalBotHighlights[i].pawnHandle == pawnHandle)
+            return &g_originalBotHighlights[i];
+    return nullptr;
+}
+
+static void CopyFourBytes(BYTE* destination, const BYTE* source)
+{
+    for (int i = 0; i < 4; ++i)
+        destination[i] = source[i];
+}
+
+static bool HighlightSlots(const BotHighlightRuntime& runtime, void* pawn,
+    BYTE** glowColor, BYTE** eligible, BYTE** glowing, BYTE** clientTint,
+    BYTE** useClientTint)
+{
+    if (!pawn || !glowColor || !eligible || !glowing || !clientTint ||
+        !useClientTint)
+        return false;
+    BYTE* base = reinterpret_cast<BYTE*>(pawn);
+    *glowColor = base + runtime.glowOffset + runtime.glowColorOffset;
+    *eligible = base + runtime.glowOffset + runtime.glowEligibleOffset;
+    *glowing = base + runtime.glowOffset + runtime.glowingOffset;
+    *clientTint = base + runtime.clientTintOffset;
+    *useClientTint = base + runtime.useClientTintOffset;
+    return IsAccessible(*glowColor, 4, true) &&
+        IsAccessible(*eligible, 1, true) &&
+        IsAccessible(*glowing, 1, true) &&
+        IsAccessible(*clientTint, 4, true) &&
+        IsAccessible(*useClientTint, 1, true);
+}
+
+static bool RememberBotHighlight(const BotHighlightRuntime& runtime,
+    unsigned int pawnHandle, void* pawn)
+{
+    OriginalBotHighlight* existing = FindOriginalBotHighlight(pawnHandle);
+    if (existing)
+    {
+        void* identity = IsAccessible(pawn, 0x18, false) ?
+            *reinterpret_cast<void**>(reinterpret_cast<BYTE*>(pawn) + 0x10) :
+            nullptr;
+        void* vtable = IsAccessible(pawn, sizeof(void*), false) ?
+            *reinterpret_cast<void**>(pawn) : nullptr;
+        if (existing->pawnAddress == pawn &&
+            existing->identityAddress == identity &&
+            existing->pawnVtable == vtable)
+            return true;
+
+        // Same numeric handle in a different object/map generation is not the
+        // entity whose bytes were captured. Drop that stale snapshot without
+        // writing it into the new pawn, then capture the new object below.
+        const int staleIndex = static_cast<int>(
+            existing - g_originalBotHighlights);
+        for (int i = staleIndex + 1; i < g_originalBotHighlightCount; ++i)
+            g_originalBotHighlights[i - 1] = g_originalBotHighlights[i];
+        --g_originalBotHighlightCount;
+    }
+    if (g_originalBotHighlightCount >= static_cast<int>(
+        sizeof(g_originalBotHighlights) / sizeof(g_originalBotHighlights[0])))
+        return false;
+    BYTE* glowColor = nullptr;
+    BYTE* eligible = nullptr;
+    BYTE* glowing = nullptr;
+    BYTE* clientTint = nullptr;
+    BYTE* useClientTint = nullptr;
+    if (!HighlightSlots(runtime, pawn, &glowColor, &eligible, &glowing,
+        &clientTint, &useClientTint))
+        return false;
+    OriginalBotHighlight& original =
+        g_originalBotHighlights[g_originalBotHighlightCount++];
+    original.pawnHandle = pawnHandle;
+    original.pawnAddress = pawn;
+    original.identityAddress = *reinterpret_cast<void**>(
+        reinterpret_cast<BYTE*>(pawn) + 0x10);
+    original.pawnVtable = *reinterpret_cast<void**>(pawn);
+    CopyFourBytes(original.glowColor, glowColor);
+    CopyFourBytes(original.clientTint, clientTint);
+    original.glowing = *glowing;
+    original.eligible = *eligible;
+    original.useClientTint = *useClientTint;
+    original.seen = true;
+    if (!IsAccessible(original.identityAddress, 0x18, false) ||
+        !IsAccessible(original.pawnVtable, sizeof(void*), false) ||
+        !IsExecutable(*reinterpret_cast<void**>(original.pawnVtable)))
+    {
+        --g_originalBotHighlightCount;
+        return false;
+    }
+    return true;
+}
+
+static bool ApplyBotHighlight(const BotHighlightRuntime& runtime,
+    unsigned int pawnHandle, void* pawn)
+{
+    if (!RememberBotHighlight(runtime, pawnHandle, pawn))
+        return false;
+    BYTE* glowColor = nullptr;
+    BYTE* eligible = nullptr;
+    BYTE* glowing = nullptr;
+    BYTE* clientTint = nullptr;
+    BYTE* useClientTint = nullptr;
+    if (!HighlightSlots(runtime, pawn, &glowColor, &eligible, &glowing,
+        &clientTint, &useClientTint))
+        return false;
+    OriginalBotHighlight* original = FindOriginalBotHighlight(pawnHandle);
+    if (original)
+        original->seen = true;
+
+    // RGBA lime-green. Glow is requested first; the client tint makes the
+    // feature visibly useful even on renderer paths that ignore raw glow
+    // property changes until an internal glow-manager registration occurs.
+    const BYTE highlightColor[4] = { 72, 255, 96, 255 };
+    CopyFourBytes(glowColor, highlightColor);
+    *eligible = 1;
+    *glowing = 1;
+    CopyFourBytes(clientTint, highlightColor);
+    *useClientTint = 1;
+    return true;
+}
+
+enum BotRestoreResult {
+    BOT_RESTORE_DONE = 1,
+    BOT_RESTORE_STALE = 0,
+    BOT_RESTORE_RETRY = -1
+};
+
+static int RestoreBotHighlight(const BotHighlightRuntime& runtime,
+    void* entitySystem, const OriginalBotHighlight& original)
+{
+    void* pawn = nullptr;
+    const int resolveResult = ResolveEntityHandle(entitySystem,
+        original.pawnHandle, &pawn);
+    if (resolveResult == ENTITY_HANDLE_RETRY)
+        return BOT_RESTORE_RETRY;
+    if (resolveResult != ENTITY_HANDLE_RESOLVED)
+        return BOT_RESTORE_STALE;
+    if (pawn != original.pawnAddress || !IsAccessible(pawn, 0x18, false) ||
+        *reinterpret_cast<void**>(pawn) != original.pawnVtable ||
+        *reinterpret_cast<void**>(reinterpret_cast<BYTE*>(pawn) + 0x10) !=
+            original.identityAddress)
+        return BOT_RESTORE_STALE;
+    BYTE* glowColor = nullptr;
+    BYTE* eligible = nullptr;
+    BYTE* glowing = nullptr;
+    BYTE* clientTint = nullptr;
+    BYTE* useClientTint = nullptr;
+    if (!HighlightSlots(runtime, pawn, &glowColor, &eligible, &glowing,
+        &clientTint, &useClientTint))
+        return BOT_RESTORE_RETRY;
+    CopyFourBytes(glowColor, original.glowColor);
+    *eligible = original.eligible;
+    *glowing = original.glowing;
+    CopyFourBytes(clientTint, original.clientTint);
+    *useClientTint = original.useClientTint;
+    return BOT_RESTORE_DONE;
+}
+
+static int RestoreAllBotHighlights(BotHighlightStats* stats)
+{
+    if (stats)
+    {
+        stats->highlighted = 0;
+        stats->restored = 0;
+    }
+    void* entitySystem = CurrentEntitySystem(g_botHighlightRuntime.entity);
+    int destination = 0;
+    for (int i = 0; i < g_originalBotHighlightCount; ++i)
+    {
+        OriginalBotHighlight& original = g_originalBotHighlights[i];
+        const int restoreResult = entitySystem ?
+            RestoreBotHighlight(g_botHighlightRuntime, entitySystem,
+                original) : BOT_RESTORE_RETRY;
+        if (restoreResult == BOT_RESTORE_DONE)
+        {
+            if (stats)
+                ++stats->restored;
+            continue;
+        }
+        if (restoreResult == BOT_RESTORE_RETRY)
+            g_originalBotHighlights[destination++] = original;
+    }
+    g_originalBotHighlightCount = destination;
+    g_botHighlightRestorePending = destination > 0;
+    return BOT_HIGHLIGHT_DISABLED;
+}
+
+static int UpdateBotHighlights(BotHighlightStats* stats)
+{
+    constexpr unsigned int kFakeClientFlag = 1u << 8;
+    if (stats)
+    {
+        stats->highlighted = 0;
+        stats->restored = 0;
+    }
+    if (!g_botHighlightRuntimeReady)
+    {
+        g_botHighlightRuntimeReady =
+            ResolveBotHighlightRuntime(&g_botHighlightRuntime);
+        if (!g_botHighlightRuntimeReady)
+            return BOT_HIGHLIGHT_ERR_SCHEMA;
+    }
+
+    void* entitySystem = CurrentEntitySystem(g_botHighlightRuntime.entity);
+    if (!entitySystem)
+        return BOT_HIGHLIGHT_WAITING_MAP;
+    if (g_lastBotEntitySystem && g_lastBotEntitySystem != entitySystem)
+    {
+        g_originalBotHighlightCount = 0;
+        g_botHighlightRestorePending = false;
+    }
+    g_lastBotEntitySystem = entitySystem;
+
+    for (int i = 0; i < g_originalBotHighlightCount; ++i)
+        g_originalBotHighlights[i].seen = false;
+
+    BYTE localTeam = 0;
+    void* localController = nullptr;
+    constexpr int kControllerSlotLimit = 64;
+    void* controllers[kControllerSlotLimit];
+    ZeroBytes(controllers, sizeof(controllers));
+    int controllerCount = 0;
+    for (int index = 1; index <= kControllerSlotLimit; ++index)
+    {
+        void* controller = EntityAtIndex(entitySystem, index);
+        if (!HasDesignerName(controller, "cs_player_controller"))
+            continue;
+        controllers[controllerCount++] = controller;
+        BYTE* localFlag = reinterpret_cast<BYTE*>(controller) +
+            g_botHighlightRuntime.localControllerOffset;
+        BYTE* team = reinterpret_cast<BYTE*>(controller) +
+            g_botHighlightRuntime.teamOffset;
+        if (!IsAccessible(localFlag, 1, false) ||
+            !IsAccessible(team, 1, false))
+            continue;
+        if (*localFlag != 0)
+        {
+            localController = controller;
+            localTeam = *team;
+        }
+    }
+
+    if (!localController || localTeam < 2 || localTeam > 3)
+    {
+        RestoreAllBotHighlights(stats);
+        return BOT_HIGHLIGHT_WAITING_LOCAL;
+    }
+
+    unsigned int humanControlledPawns[kControllerSlotLimit];
+    ZeroBytes(humanControlledPawns, sizeof(humanControlledPawns));
+    int humanControlledPawnCount = 0;
+    for (int i = 0; i < controllerCount; ++i)
+    {
+        BYTE* base = reinterpret_cast<BYTE*>(controllers[i]);
+        unsigned int* flags = reinterpret_cast<unsigned int*>(
+            base + g_botHighlightRuntime.flagsOffset);
+        BYTE* controllingBot = base +
+            g_botHighlightRuntime.controllingBotOffset;
+        unsigned int* pawnHandle = reinterpret_cast<unsigned int*>(
+            base + g_botHighlightRuntime.playerPawnHandleOffset);
+        if (IsAccessible(flags, sizeof(unsigned int), false) &&
+            IsAccessible(controllingBot, 1, false) &&
+            IsAccessible(pawnHandle, sizeof(unsigned int), false) &&
+            (*flags & kFakeClientFlag) == 0 && *controllingBot != 0)
+            humanControlledPawns[humanControlledPawnCount++] = *pawnHandle;
+    }
+
+    for (int i = 0; i < controllerCount; ++i)
+    {
+        void* controller = controllers[i];
+        if (controller == localController)
+            continue;
+        BYTE* base = reinterpret_cast<BYTE*>(controller);
+        BYTE* team = base + g_botHighlightRuntime.teamOffset;
+        unsigned int* flags = reinterpret_cast<unsigned int*>(
+            base + g_botHighlightRuntime.flagsOffset);
+        BYTE* pawnAlive = base + g_botHighlightRuntime.pawnAliveOffset;
+        unsigned int* pawnHandle = reinterpret_cast<unsigned int*>(
+            base + g_botHighlightRuntime.playerPawnHandleOffset);
+        if (!IsAccessible(team, 1, false) ||
+            !IsAccessible(flags, sizeof(unsigned int), false) ||
+            !IsAccessible(pawnAlive, 1, false) ||
+            !IsAccessible(pawnHandle, sizeof(unsigned int), false) ||
+            *team != localTeam || (*flags & kFakeClientFlag) == 0 ||
+            *pawnAlive == 0)
+            continue;
+
+        bool controlledByHuman = false;
+        for (int humanIndex = 0;
+            humanIndex < humanControlledPawnCount; ++humanIndex)
+        {
+            if (humanControlledPawns[humanIndex] == *pawnHandle)
+            {
+                controlledByHuman = true;
+                break;
+            }
+        }
+        if (controlledByHuman)
+            continue;
+
+        void* pawn = EntityFromHandle(entitySystem, *pawnHandle);
+        if (!pawn)
+            continue;
+        BYTE* pawnBase = reinterpret_cast<BYTE*>(pawn);
+        BYTE* pawnTeam = pawnBase + g_botHighlightRuntime.teamOffset;
+        int* health = reinterpret_cast<int*>(
+            pawnBase + g_botHighlightRuntime.healthOffset);
+        BYTE* lifeState = pawnBase + g_botHighlightRuntime.lifeStateOffset;
+        if (!IsAccessible(pawnTeam, 1, false) ||
+            !IsAccessible(health, sizeof(int), false) ||
+            !IsAccessible(lifeState, 1, false) ||
+            *pawnTeam != localTeam || *health <= 0 || *health > 1000 ||
+            *lifeState != 0)
+            continue;
+        if (ApplyBotHighlight(g_botHighlightRuntime, *pawnHandle, pawn) &&
+            stats)
+            ++stats->highlighted;
+    }
+
+    int destination = 0;
+    for (int i = 0; i < g_originalBotHighlightCount; ++i)
+    {
+        OriginalBotHighlight& original = g_originalBotHighlights[i];
+        if (!original.seen)
+        {
+            const int restoreResult = RestoreBotHighlight(
+                g_botHighlightRuntime, entitySystem, original);
+            if (restoreResult == BOT_RESTORE_DONE)
+            {
+                if (stats)
+                    ++stats->restored;
+                continue;
+            }
+            if (restoreResult == BOT_RESTORE_STALE)
+                continue;
+        }
+        g_originalBotHighlights[destination++] = original;
+    }
+    g_originalBotHighlightCount = destination;
+    return stats && stats->highlighted > 0 ? BOT_HIGHLIGHT_ACTIVE :
+        BOT_HIGHLIGHT_WAITING_BOTS;
+}
+
+static void QueueBotHighlight(bool enabled)
+{
+    if (!g_frameStageVtableSlot || !g_originalFrameStageNotify)
+    {
+        if (g_botHighlightCheck)
+            SendMessageW(g_botHighlightCheck, BM_SETCHECK,
+                BST_UNCHECKED, 0);
+        SetStatus(L"Status: CS2 frame-stage bridge is unavailable.");
+        return;
+    }
+    AtomicExchange(&g_pendingBotHighlightRequest, enabled ? 1 : -1);
+    SetStatus(enabled ?
+        L"Status: teammate-bot highlight queued for CS2 render frame..." :
+        L"Status: bot highlight restore queued for CS2 render frame...");
+}
+
 static void QueueSelectedSkybox()
 {
     if (!g_skyboxCombo || !g_frameStageVtableSlot ||
@@ -1141,6 +1891,63 @@ static void FrameStageNotifyHook(void* client, int stage)
         }
     }
     g_originalFrameStageNotify(client, stage);
+    if (stage == FRAME_RENDER_PASS)
+    {
+        const LONG botRequest = AtomicExchange(
+            &g_pendingBotHighlightRequest, 0);
+        if (botRequest < 0)
+        {
+            BotHighlightStats stats{};
+            RestoreAllBotHighlights(&stats);
+            g_botHighlightEnabled = false;
+            g_botHighlightFrameCounter = 0;
+            const int result = g_botHighlightRestorePending ?
+                BOT_HIGHLIGHT_RESTORE_PENDING : BOT_HIGHLIGHT_DISABLED;
+            g_lastBotHighlightResult = result;
+            if (g_menuWindow)
+                PostMessageW(g_menuWindow, WM_CAS_BOT_STATUS,
+                    static_cast<WPARAM>(result),
+                    static_cast<LPARAM>(stats.restored));
+        }
+        else if (botRequest > 0)
+        {
+            g_botHighlightEnabled = true;
+            g_botHighlightRestorePending = false;
+            g_botHighlightFrameCounter = 0;
+            BotHighlightStats stats{};
+            const int result = UpdateBotHighlights(&stats);
+            if (result < 0)
+                g_botHighlightEnabled = false;
+            g_lastBotHighlightResult = result;
+            if (g_menuWindow)
+                PostMessageW(g_menuWindow, WM_CAS_BOT_STATUS,
+                    static_cast<WPARAM>(static_cast<LONG_PTR>(result)),
+                    static_cast<LPARAM>(stats.highlighted));
+        }
+        else if (g_botHighlightEnabled &&
+            ++g_botHighlightFrameCounter >= 4)
+        {
+            g_botHighlightFrameCounter = 0;
+            BotHighlightStats stats{};
+            const int result = UpdateBotHighlights(&stats);
+            if (result != g_lastBotHighlightResult && g_menuWindow)
+                PostMessageW(g_menuWindow, WM_CAS_BOT_STATUS,
+                    static_cast<WPARAM>(static_cast<LONG_PTR>(result)),
+                    static_cast<LPARAM>(stats.highlighted));
+            g_lastBotHighlightResult = result;
+        }
+        else if (g_botHighlightRestorePending &&
+            ++g_botHighlightFrameCounter >= 4)
+        {
+            g_botHighlightFrameCounter = 0;
+            BotHighlightStats stats{};
+            RestoreAllBotHighlights(&stats);
+            if (!g_botHighlightRestorePending && g_menuWindow)
+                PostMessageW(g_menuWindow, WM_CAS_BOT_STATUS,
+                    static_cast<WPARAM>(BOT_HIGHLIGHT_DISABLED),
+                    static_cast<LPARAM>(stats.restored));
+        }
+    }
 }
 
 static bool CompareExchangeVtableSlot(void** slot, void* desired,
@@ -1163,6 +1970,10 @@ static bool InstallFrameStageBridge()
     HMODULE clientModule = GetModuleHandleW(L"client.dll");
     if (!clientModule)
         return false;
+    // The entity signatures scan the full module. Resolve them on the payload
+    // worker before installing the callback, never inside a CS2 render frame.
+    g_preResolvedEntityRuntimeReady = ResolveEntityRuntime(clientModule,
+        &g_preResolvedEntityRuntime);
     auto createInterface = reinterpret_cast<CreateInterfaceFn>(
         GetProcAddress(clientModule, "CreateInterface"));
     if (!createInterface)
@@ -1207,6 +2018,7 @@ static bool InstallFrameStageBridge()
 static void RemoveFrameStageBridge()
 {
     AtomicExchange(&g_pendingSkyboxRequest, 0);
+    AtomicExchange(&g_pendingBotHighlightRequest, 0);
     if (g_frameStageVtableSlot && g_originalFrameStageNotify)
         CompareExchangeVtableSlot(g_frameStageVtableSlot,
             reinterpret_cast<void*>(g_originalFrameStageNotify),
@@ -1237,11 +2049,44 @@ static void ShowSkyboxResult(int result)
         SetStatus(L"Status: skybox request failed validation.");
 }
 
+static void ShowBotHighlightResult(int result, int count)
+{
+    if (result == BOT_HIGHLIGHT_ACTIVE)
+        SetStatus(count == 1 ?
+            L"Status: highlighting 1 teammate bot (glow + green tint)." :
+            L"Status: teammate bots highlighted (glow + green tint).");
+    else if (result == BOT_HIGHLIGHT_DISABLED)
+        SetStatus(count > 0 ?
+            L"Status: bot highlight disabled; original colors restored." :
+            L"Status: bot highlight disabled.");
+    else if (result == BOT_HIGHLIGHT_WAITING_LOCAL)
+        SetStatus(L"Status: highlight enabled; waiting for your live team.");
+    else if (result == BOT_HIGHLIGHT_WAITING_BOTS)
+        SetStatus(L"Status: highlight enabled; no live teammate bots found.");
+    else if (result == BOT_HIGHLIGHT_WAITING_MAP)
+        SetStatus(L"Status: highlight enabled; waiting for a loaded map.");
+    else if (result == BOT_HIGHLIGHT_RESTORE_PENDING)
+        SetStatus(L"Status: highlight off; waiting to restore unavailable pawn.");
+    else if (result == BOT_HIGHLIGHT_ERR_SCHEMA)
+        SetStatus(L"Status: CS2 schema changed; bot highlight stayed off.");
+    else
+        SetStatus(L"Status: bot highlight runtime validation failed.");
+}
+
 static LRESULT CALLBACK MenuWindowProc(HWND wnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
     if (msg == WM_POTATO_STATUS)
     {
         ShowSkyboxResult(static_cast<int>(static_cast<LONG_PTR>(wParam)));
+        return 0;
+    }
+    if (msg == WM_CAS_BOT_STATUS)
+    {
+        const int result = static_cast<int>(static_cast<LONG_PTR>(wParam));
+        if (result < 0 && g_botHighlightCheck)
+            SendMessageW(g_botHighlightCheck, BM_SETCHECK,
+                BST_UNCHECKED, 0);
+        ShowBotHighlightResult(result, static_cast<int>(lParam));
         return 0;
     }
     if (msg == WM_COMMAND)
@@ -1258,6 +2103,14 @@ static LRESULT CALLBACK MenuWindowProc(HWND wnd, UINT msg, WPARAM wParam, LPARAM
             QueueRestoreSkybox();
             return 0;
         }
+        if (notification == BN_CLICKED && id == IDC_BOT_HIGHLIGHT)
+        {
+            const bool enabled = g_botHighlightCheck &&
+                SendMessageW(g_botHighlightCheck, BM_GETCHECK, 0, 0) ==
+                    BST_CHECKED;
+            QueueBotHighlight(enabled);
+            return 0;
+        }
     }
     if (msg == WM_CLOSE)
     {
@@ -1271,7 +2124,7 @@ static LRESULT CALLBACK MenuWindowProc(HWND wnd, UINT msg, WPARAM wParam, LPARAM
 
 static HWND CreateMenuWindow(HINSTANCE instance, HWND owner)
 {
-    static const wchar_t kClassName[] = L"CasPlusSkyboxMenu420";
+    static const wchar_t kClassName[] = L"CasPlusOfflineVisualsMenu430";
     WNDCLASSEXW wc{};
     wc.cbSize = sizeof(WNDCLASSEXW);
     wc.lpfnWndProc = MenuWindowProc;
@@ -1281,8 +2134,8 @@ static HWND CreateMenuWindow(HINSTANCE instance, HWND owner)
     RegisterClassExW(&wc);
 
     constexpr int kWidth = 500;
-    constexpr int kHeight = 255;
-    HWND wnd = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE, kClassName, L"cas+ - CS2 Skybox",
+    constexpr int kHeight = 315;
+    HWND wnd = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE, kClassName, L"cas+ - CS2 Offline Visuals",
         WS_POPUP | WS_BORDER, 0, 0, kWidth, kHeight, owner, nullptr, instance, nullptr);
     if (!wnd)
         return nullptr;
@@ -1303,8 +2156,14 @@ static HWND CreateMenuWindow(HINSTANCE instance, HWND owner)
         110, 103, 160, 36, wnd, reinterpret_cast<HMENU>(static_cast<ULONG_PTR>(IDC_APPLY_SKYBOX)), instance, nullptr);
     CreateWindowExW(0, L"BUTTON", L"Restore", WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
         295, 103, 160, 36, wnd, reinterpret_cast<HMENU>(static_cast<ULONG_PTR>(IDC_RESTORE_SKYBOX)), instance, nullptr);
+    g_botHighlightCheck = CreateWindowExW(0, L"BUTTON",
+        L"Highlight teammate bots (glow + green tint)",
+        WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
+        55, 158, 390, 30, wnd,
+        reinterpret_cast<HMENU>(static_cast<ULONG_PTR>(IDC_BOT_HIGHLIGHT)),
+        instance, nullptr);
     g_statusLabel = CreateWindowExW(0, L"STATIC", L"Status: ready. Load a map, then choose a preset.",
-        WS_CHILD | WS_VISIBLE | SS_CENTER | SS_CENTERIMAGE, 30, 158, 440, 55, wnd, nullptr, instance, nullptr);
+        WS_CHILD | WS_VISIBLE | SS_CENTER | SS_CENTERIMAGE, 30, 210, 440, 65, wnd, nullptr, instance, nullptr);
     return wnd;
 }
 
@@ -1319,7 +2178,7 @@ static bool PositionMenuOverGame()
     if (!ClientToScreen(g_gameWindow, &origin))
         return false;
     constexpr int kWidth = 500;
-    constexpr int kHeight = 255;
+    constexpr int kHeight = 315;
     const int width = static_cast<int>(client.right - client.left);
     const int height = static_cast<int>(client.bottom - client.top);
     const int x = origin.x + ((width > kWidth) ? (width - kWidth) / 2 : 0);
@@ -1346,7 +2205,7 @@ static DWORD WINAPI PayloadThread(LPVOID parameter)
     PositionMenuOverGame();
 
 #ifdef POTATO_DIAGNOSTIC
-    MessageBoxW(g_gameWindow, L"cas+ skybox worker started.\nPress Insert while CS2 is focused.",
+    MessageBoxW(g_gameWindow, L"cas+ offline visuals started.\nPress Insert while CS2 is focused.",
         L"cas+ diagnostic", MB_OK | MB_ICONINFORMATION);
 #endif
 
@@ -1398,7 +2257,7 @@ static DWORD WINAPI PayloadThread(LPVOID parameter)
 
 extern "C" __declspec(dllexport) unsigned int WINAPI PotatoPayloadVersion()
 {
-    return 0x00040200u;
+    return 0x00040300u;
 }
 
 extern "C" BOOL WINAPI DllMain(HMODULE module, DWORD reason, LPVOID)
