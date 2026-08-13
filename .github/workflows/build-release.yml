@@ -2,7 +2,7 @@ name: Build DLL and Injector
 
 on:
   push:
-    branches: [main]
+    branches: [main, chams-render-passes]
     tags: ['v*']
   pull_request:
     branches: [main]
