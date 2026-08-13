@@ -29,7 +29,8 @@ if (Test-Path -LiteralPath $artifactsRoot) {
     Remove-Item -LiteralPath $resolvedArtifacts -Recurse -Force
 }
 
-New-Item -ItemType Directory -Path $injectorOutput, $payloadOutput, (Join-Path $packageRoot 'dlls') -Force | Out-Null
+$loaderOutput = Join-Path $artifactsRoot 'loader'
+New-Item -ItemType Directory -Path $injectorOutput, $payloadOutput, $loaderOutput, (Join-Path $packageRoot 'dlls') -Force | Out-Null
 
 $commonArgs = @(
     '/m',
@@ -46,11 +47,16 @@ if ($LASTEXITCODE -ne 0) { throw "Injector build failed with exit code $LASTEXIT
 & $msbuild (Join-Path $projectRoot 'payload\PotatoPayload.vcxproj') @commonArgs "/p:OutDir=$payloadOutput\"
 if ($LASTEXITCODE -ne 0) { throw "Payload build failed with exit code $LASTEXITCODE." }
 
+& $msbuild (Join-Path $projectRoot 'loader\Loader.vcxproj') @commonArgs "/p:OutDir=$loaderOutput\"
+if ($LASTEXITCODE -ne 0) { throw "Loader build failed with exit code $LASTEXITCODE." }
+
 $injectorName = if ($Configuration -eq 'Release') { 'cas-plus.exe' } else { 'cas-plus-debug.exe' }
 $payloadName = if ($Configuration -eq 'Release') { 'cas-plus-payload.dll' } else { 'cas-plus-payload-debug.dll' }
+$loaderName = if ($Configuration -eq 'Release') { 'loader.exe' } else { 'loader-debug.exe' }
 
 Copy-Item -LiteralPath (Join-Path $injectorOutput $injectorName) -Destination (Join-Path $packageRoot 'cas-plus.exe')
 Copy-Item -LiteralPath (Join-Path $payloadOutput $payloadName) -Destination (Join-Path $packageRoot 'dlls\cas-plus-payload.dll')
+Copy-Item -LiteralPath (Join-Path $loaderOutput $loaderName) -Destination (Join-Path $packageRoot 'loader.exe')
 if (Test-Path (Join-Path $projectRoot 'README.md')) {
     Copy-Item -LiteralPath (Join-Path $projectRoot 'README.md') -Destination $packageRoot
 }

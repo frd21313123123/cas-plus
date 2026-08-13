@@ -98,9 +98,47 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+  build-loader:
+    name: Build Loader (Release x64)
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure MSBuild
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Build Loader
+        shell: pwsh
+        run: |
+          $out = Join-Path $env:GITHUB_WORKSPACE 'artifacts\loader'
+          New-Item -ItemType Directory -Path $out -Force | Out-Null
+
+          msbuild '.\loader\Loader.vcxproj' `
+            /m `
+            /t:Rebuild `
+            /p:Configuration=Release `
+            /p:Platform=x64 `
+            /v:minimal `
+            "/p:OutDir=$out\"
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "Loader build failed with exit code $LASTEXITCODE."
+          }
+
+      - name: Upload Loader artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-loader-x64
+          path: artifacts/loader/*.exe
+          if-no-files-found: error
+          retention-days: 14
+
   package:
     name: Package Windows x64
-    needs: [build-dll, build-exe]
+    needs: [build-dll, build-exe, build-loader]
     runs-on: windows-latest
     timeout-minutes: 10
 
@@ -109,12 +147,18 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: windows-dll-x64
-          path: package/dll
+          path: package/dlls
 
-      - name: Download EXE
+      - name: Download Injector EXE
         uses: actions/download-artifact@v4
         with:
           name: windows-exe-x64
+          path: package
+
+      - name: Download Loader EXE
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-loader-x64
           path: package
 
       - name: Create ZIP

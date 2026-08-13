@@ -123,6 +123,7 @@ struct WNDCLASSEXW {
 
 #define WS_EX_TOOLWINDOW 0x00000080UL
 #define WS_EX_NOACTIVATE 0x08000000UL
+#define WS_EX_TOPMOST    0x00000008UL
 
 #define COLOR_BTNFACE 15
 #define HWND_TOP ((HWND)0)
@@ -256,6 +257,7 @@ __declspec(dllimport) BOOL WINAPI InvalidateRect(HWND, const RECT*, BOOL);
 __declspec(dllimport) BOOL WINAPI GetCursorPos(POINT*);
 __declspec(dllimport) BOOL WINAPI ScreenToClient(HWND, POINT*);
 
+__declspec(dllimport) BOOL WINAPI MessageBeep(UINT);
 #ifdef POTATO_DIAGNOSTIC
 __declspec(dllimport) int WINAPI MessageBoxW(HWND, LPCWSTR, LPCWSTR, UINT);
 #endif
@@ -346,7 +348,7 @@ static HWND g_skyboxCombo = nullptr;
 static HWND g_botHighlightCheck = nullptr;
 static HWND g_skyboxStatusLabel = nullptr;
 static HWND g_botStatusLabel = nullptr;
-static bool g_menuRequested = false;
+static bool g_menuRequested = true;
 static bool g_menuActuallyShown = false;
 static volatile LONG g_pendingSkyboxRequest = 0;
 static volatile LONG g_pendingBotHighlightRequest = 0;
@@ -3592,21 +3594,22 @@ static LRESULT CALLBACK MenuWindowProc(HWND wnd, UINT msg, WPARAM wParam, LPARAM
     return DefWindowProcW(wnd, msg, wParam, lParam);
 }
 
-static HWND CreateMenuWindow(HINSTANCE instance, HWND owner)
+static HWND CreateMenuWindow(HINSTANCE, HWND owner)
 {
+    HINSTANCE exeInstance = GetModuleHandleW(nullptr);
     static const wchar_t kClassName[] = L"CasPlusOfflineVisualsMenu441";
     WNDCLASSEXW wc{};
     wc.cbSize = sizeof(WNDCLASSEXW);
     wc.lpfnWndProc = MenuWindowProc;
-    wc.hInstance = instance;
+    wc.hInstance = exeInstance;
     wc.hbrBackground = reinterpret_cast<HBRUSH>(static_cast<ULONG_PTR>(COLOR_BTNFACE + 1));
     wc.lpszClassName = kClassName;
     RegisterClassExW(&wc);
 
     constexpr int kWidth = 780;
     constexpr int kHeight = 500;
-    HWND wnd = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE, kClassName, L"CAS v2.3 - ESP Settings & Interactive Preview",
-        WS_POPUP | WS_BORDER, 0, 0, kWidth, kHeight, owner, nullptr, instance, nullptr);
+    HWND wnd = CreateWindowExW(WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE, kClassName, L"CAS v2.3 - ESP Settings & Interactive Preview",
+        WS_POPUP | WS_BORDER, 0, 0, kWidth, kHeight, owner, nullptr, exeInstance, nullptr);
     return wnd;
 }
 
@@ -3626,7 +3629,7 @@ static bool PositionMenuOverGame()
     const int height = static_cast<int>(client.bottom - client.top);
     const int x = origin.x + ((width > kWidth) ? (width - kWidth) / 2 : 0);
     const int y = origin.y + ((height > kHeight) ? (height - kHeight) / 2 : 0);
-    return SetWindowPos(g_menuWindow, HWND_TOP, x, y, kWidth, kHeight, SWP_NOSIZE | SWP_NOACTIVATE) != 0;
+    return SetWindowPos(g_menuWindow, reinterpret_cast<HWND>(static_cast<LONG_PTR>(-1)), x, y, kWidth, kHeight, SWP_NOSIZE | SWP_NOACTIVATE | 0x0040) != 0;
 }
 
 static DWORD WINAPI PayloadThread(LPVOID parameter)
@@ -3649,6 +3652,7 @@ static DWORD WINAPI PayloadThread(LPVOID parameter)
         SetBotStatus(L"Bots: failed to install the frame-stage bridge.");
     }
     PositionMenuOverGame();
+    MessageBeep(0x00000040UL);
 
 #ifdef POTATO_DIAGNOSTIC
     MessageBoxW(g_gameWindow, L"cas+ offline visuals started.\nPress Insert while CS2 is focused.",
