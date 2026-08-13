@@ -20,7 +20,7 @@ jobs:
         with:
           python-version: '3.x'
       - name: Apply focused source patch
-        run: python tools/apply_chams_patch.py
+        run: python tools/run_chams_patch.py
       - name: Commit generated source change
         shell: pwsh
         run: |
