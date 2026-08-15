@@ -78,7 +78,7 @@ struct MeshRenderBackendState {
 
 static MeshRenderBackendState g_meshRenderBackend{};
 static PatchKernelApi g_patchKernelApi{};
-static volatile LONG g_meshHookBypass = 0;
+static volatile LONG g_meshHookBypass = 1;
 
 #pragma section(".cpxtrm", read, execute)
 __declspec(allocate(".cpxtrm")) static BYTE g_drawObjectTrampoline[64] = { 0xCC };
@@ -729,6 +729,9 @@ static bool InstallMeshRenderBackend()
     g_meshRenderBackend.originalDrawObject = reinterpret_cast<SceneDrawObjectFn>(
         reinterpret_cast<void*>(&g_drawObjectTrampoline[0]));
 
+    // Keep any newly entering call in pure-forward mode until the safe patch
+    // has completed and the installed state is published.
+    AtomicExchange(&g_meshHookBypass, 1);
     BYTE patch[kDrawPatchSize];
     WriteAbsoluteIndirectJump(patch,
         reinterpret_cast<const void*>(&MeshDrawObjectHook));
@@ -739,8 +742,8 @@ static bool InstallMeshRenderBackend()
         return false;
     }
 
-    AtomicExchange(&g_meshHookBypass, 0);
     g_meshRenderBackend.installed = true;
+    AtomicExchange(&g_meshHookBypass, 0);
     return true;
 }
 
