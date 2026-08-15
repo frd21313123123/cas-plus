@@ -202,6 +202,46 @@ static void ResetVisualTargets()
     UnlockVisualTargets();
 }
 
+// The render hook takes one immutable copy per DrawObject call. Returning -1
+// means the publication lock was momentarily busy; callers must fail closed and
+// render the original batch unchanged rather than mixing target generations.
+static int CopyVisualTargetSnapshot(VisualTargetEntry* destination,
+    int capacity, unsigned int* generation)
+{
+    if (!destination || capacity <= 0 || !TryLockVisualTargets())
+        return -1;
+    int count = g_visualTargets.count;
+    if (count < 0)
+        count = 0;
+    if (count > kMaxVisualTargets)
+        count = kMaxVisualTargets;
+    if (count > capacity)
+        count = capacity;
+    for (int i = 0; i < count; ++i)
+    {
+        destination[i].handle = g_visualTargets.entries[i].handle;
+        destination[i].kind = g_visualTargets.entries[i].kind;
+    }
+    if (generation)
+        *generation = g_visualTargets.generation;
+    UnlockVisualTargets();
+    return count;
+}
+
+static VisualTargetKind VisualTargetKindFromSnapshot(unsigned int handle,
+    const VisualTargetEntry* snapshot, int count)
+{
+    if (handle == 0 || handle == 0xFFFFFFFFu || !snapshot || count <= 0)
+        return VISUAL_TARGET_NONE;
+    const int boundedCount = count > kMaxVisualTargets ? kMaxVisualTargets : count;
+    for (int i = 0; i < boundedCount; ++i)
+    {
+        if (snapshot[i].handle == handle)
+            return static_cast<VisualTargetKind>(snapshot[i].kind);
+    }
+    return VISUAL_TARGET_NONE;
+}
+
 static VisualTargetKind VisualTargetKindFor(unsigned int handle)
 {
     if (handle == 0 || handle == 0xFFFFFFFFu || !TryLockVisualTargets())
