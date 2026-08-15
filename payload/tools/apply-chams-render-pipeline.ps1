@@ -196,8 +196,8 @@ $generatedVisualBackend = $targetRegistry + "`r`n" + $targetCollector + "`r`n" +
     $meshBackend + "`r`n" + $diagnostics + "`r`n" + $newPipeline + "`r`n"
 $source = $source.Substring(0, $start) + $generatedVisualBackend + $source.Substring($end)
 
-# Resolve/install the scene hook only from the frame-stage game lifecycle. The
-# manual-map worker owns UI/bootstrap only and never patches scenesystem.dll.
+# Discovery can start early, but expensive/one-shot render backend resolution
+# happens only after the entity/schema/local lifecycle is fully validated.
 $updateStartAnchor = @'
 static int UpdateBotHighlights(BotHighlightStats* stats)
 {
@@ -206,8 +206,6 @@ static int UpdateBotHighlights(BotHighlightStats* stats)
 $updateStartReplacement = @'
 static int UpdateBotHighlights(BotHighlightStats* stats)
 {
-    InstallMeshRenderBackend();
-    EnsureMaterialManagerReady();
     BeginVisualTargetUpdate();
     if (stats)
 '@
@@ -328,6 +326,24 @@ $localIdentityReplacement = @'
 '@
 if (-not $source.Contains($localIdentityAnchor)) { throw 'Local identity wait anchor was not found. Refusing to patch blindly.' }
 $source = $source.Replace($localIdentityAnchor, $localIdentityReplacement)
+
+$backendReadyAnchor = @'
+    g_lastLocalController = localController;
+    g_lastLocalControllerIdentity = localIdentity;
+    g_lastLocalControllerHandle = localHandle;
+'@
+$backendReadyReplacement = @'
+    g_lastLocalController = localController;
+    g_lastLocalControllerIdentity = localIdentity;
+    g_lastLocalControllerHandle = localHandle;
+
+    // At this point Schema, entity system, local team and full local controller
+    // identity are all valid. Only now consume one-shot renderer resolution.
+    InstallMeshRenderBackend();
+    EnsureMaterialManagerReady();
+'@
+if (-not $source.Contains($backendReadyAnchor)) { throw 'Renderer runtime-ready anchor was not found. Refusing to patch blindly.' }
+$source = $source.Replace($backendReadyAnchor, $backendReadyReplacement)
 
 $oldBotBookkeeping = @'
     unsigned int humanControlledPawns[kControllerSlotLimit];
@@ -463,11 +479,14 @@ $shutdownAnchor = @'
 $shutdownReplacement = @'
     if (g_botHighlightRuntimeReady && g_originalBotHighlightCount > 0)
         RestoreAllBotHighlights(nullptr);
-    RemoveMeshRenderBackend();
-    ResetMaterialManagerState();
-    ResetVisualTargets();
-    g_meshRenderBackend.drawObjectTarget = nullptr;
-    g_meshRenderBackend.resolved = false;
+    const bool meshRemoved = RemoveMeshRenderBackend();
+    if (meshRemoved)
+    {
+        ResetMaterialManagerState();
+        ResetVisualTargets();
+        g_meshRenderBackend.drawObjectTarget = nullptr;
+        g_meshRenderBackend.resolved = false;
+    }
     RemoveFrameStageBridge();
     return 0;
 '@
