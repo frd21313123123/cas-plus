@@ -11,10 +11,15 @@ $ErrorActionPreference = 'Stop'
 $source = Get-Content -LiteralPath $InputPath -Raw -Encoding UTF8
 $sourceDirectory = Split-Path -Parent $InputPath
 $pipelinePath = Join-Path $sourceDirectory 'visuals\chams_render_pipeline.inc'
+$meshProbePath = Join-Path $sourceDirectory 'visuals\mesh_render_probe.inc'
 if (-not (Test-Path -LiteralPath $pipelinePath)) {
     throw "Chams render pipeline module was not found: $pipelinePath"
 }
+if (-not (Test-Path -LiteralPath $meshProbePath)) {
+    throw "Mesh render probe module was not found: $meshProbePath"
+}
 $newPipeline = Get-Content -LiteralPath $pipelinePath -Raw -Encoding UTF8
+$meshProbe = Get-Content -LiteralPath $meshProbePath -Raw -Encoding UTF8
 
 $oldConfig = @'
     bool chams = true;
@@ -49,7 +54,8 @@ $end = $source.IndexOf($endAnchor)
 if ($start -lt 0 -or $end -le $start) {
     throw 'ApplyModelPasses anchors were not found. The payload source changed; refusing to patch blindly.'
 }
-$source = $source.Substring(0, $start) + $newPipeline + "`r`n" + $source.Substring($end)
+$generatedVisualBackend = $meshProbe + "`r`n" + $newPipeline + "`r`n"
+$source = $source.Substring(0, $start) + $generatedVisualBackend + $source.Substring($end)
 
 # Do not invent a team when the local controller is not ready. A forced CT
 # fallback could classify teammates as enemies during connect/map transitions.
@@ -100,7 +106,8 @@ $source = $source.Replace($oldBotBookkeeping, '')
 
 # ESPConfig defaults must become active immediately after the bridge is ready;
 # previously Chams could appear enabled in the UI while the backend stayed off
-# until the user clicked a visual setting.
+# until the user clicked a visual setting. Probe the scene-system render entry
+# at the same lifecycle boundary; it is only a capability check, not a detour.
 $startupAnchor = @'
     if (!InstallFrameStageBridge())
     {
@@ -117,6 +124,7 @@ $startupReplacement = @'
     }
     else
     {
+        ResolveMeshRenderBackend();
         const bool modelEffects = g_espConfig.enable &&
             (g_espConfig.chams || g_espConfig.glow);
         g_botHighlightEnabled = modelEffects;
@@ -137,6 +145,8 @@ $shutdownAnchor = @'
 $shutdownReplacement = @'
     if (g_botHighlightRuntimeReady && g_originalBotHighlightCount > 0)
         RestoreAllBotHighlights(nullptr);
+    g_meshRenderBackend.drawObjectTarget = nullptr;
+    g_meshRenderBackend.resolved = false;
     RemoveFrameStageBridge();
     return 0;
 '@
