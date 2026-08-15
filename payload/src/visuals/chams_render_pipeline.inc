@@ -118,6 +118,14 @@ static bool ApplyModelPasses(const BotHighlightRuntime& runtime,
     bool allowOccludedPass)
 {
     ++g_chamsRenderStats.modelUpdates;
+
+    // The legacy controller loop publishes the enemy pawn first. Expand that
+    // typed entry here while the same Schema-backed pawn/runtime are available,
+    // so its active weapon joins the next immutable render snapshot without
+    // adding weapon discovery logic to the DrawObject hot path.
+    if (VisualTargetKindBeingBuilt(entityHandle) == VISUAL_TARGET_ENEMY_PAWN)
+        AddEnemyPawnVisualTargets(runtime, entityHandle, modelEntity);
+
     if (!RememberBotHighlight(runtime, entityHandle, modelEntity))
     {
         ++g_chamsRenderStats.failures;
