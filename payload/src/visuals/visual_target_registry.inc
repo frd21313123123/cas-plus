@@ -1,7 +1,7 @@
 // Frame-stage-owned target registry consumed by the mesh renderer.
-// The builder is written only by UpdateBotHighlights. A short interlocked
-// publication lock protects the published snapshot from a concurrent scene
-// render callback without keeping the lock during entity/schema scanning.
+// A new target list is built off to the side and published as one short locked
+// snapshot. The previous generation remains readable while schema/entity
+// scanning is in progress, so DrawObject never observes a half-built list.
 
 extern "C" LONG _InterlockedCompareExchange(volatile LONG*, LONG, LONG);
 #pragma intrinsic(_InterlockedCompareExchange)
@@ -47,11 +47,23 @@ static void AddEnemyVisualTarget(unsigned int handle)
     g_visualTargetBuild[g_visualTargetBuildCount++] = handle;
 }
 
+static bool IsEnemyVisualTargetBeingBuilt(unsigned int handle)
+{
+    if (handle == 0xFFFFFFFFu)
+        return false;
+    for (int i = 0; i < g_visualTargetBuildCount; ++i)
+    {
+        if (g_visualTargetBuild[i] == handle)
+            return true;
+    }
+    return false;
+}
+
 static void PublishVisualTargets()
 {
-    // Publication is tiny (at most 64 dwords). If a scene callback is reading
-    // the snapshot at this exact instant, skip this publication rather than
-    // stalling the render path or exposing a partially-written list.
+    // Publication is tiny (at most 64 dwords). If a render callback owns the
+    // snapshot at this instant, keep the previous complete generation instead
+    // of exposing an incomplete list.
     if (!TryLockVisualTargets())
         return;
     g_visualTargets.enemyCount = g_visualTargetBuildCount;
