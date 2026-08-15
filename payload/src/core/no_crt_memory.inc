@@ -1,14 +1,12 @@
 // Minimal memory primitives for the payload's /NODEFAULTLIB build.
-// MSVC /O2 may lower otherwise ordinary aggregate initialization/copy loops to
-// memcpy/memset calls. Supplying local implementations keeps that optimization
-// compatible with the project's no-CRT/manual-map contract.
+// MSVC /O2 may lower ordinary aggregate initialization/copy loops to external
+// memcpy/memset calls even though cas+ intentionally does not link a CRT.
 //
-// C2169 is raised if these symbols are still in intrinsic mode when their local
-// definitions are parsed. #pragma function explicitly switches them back to
-// ordinary callable functions; PotatoPayload.vcxproj also keeps /Oi disabled.
-#pragma function(memcpy, memset)
+// Do not define the reserved intrinsic names in C++: MSVC 18 rejects that with
+// C2169. PotatoPayload.vcxproj aliases unresolved memcpy/memset references to
+// these ordinary local symbols at link time instead.
 
-extern "C" void* __cdecl memcpy(void* destination, const void* source,
+extern "C" void* __cdecl CasPlusMemcpy(void* destination, const void* source,
     SIZE_T count)
 {
     if (!destination || !source || count == 0)
@@ -20,7 +18,8 @@ extern "C" void* __cdecl memcpy(void* destination, const void* source,
     return destination;
 }
 
-extern "C" void* __cdecl memset(void* destination, int value, SIZE_T count)
+extern "C" void* __cdecl CasPlusMemset(void* destination, int value,
+    SIZE_T count)
 {
     if (!destination || count == 0)
         return destination;
