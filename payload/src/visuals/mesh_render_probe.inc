@@ -23,6 +23,7 @@ struct MeshRenderBackendState {
     BYTE originalPrologue[kDrawPatchSize];
     bool resolved;
     bool installed;
+    bool installAttempted;
     unsigned int drawCalls;
     unsigned int targetDraws;
     unsigned int visiblePasses;
@@ -230,7 +231,10 @@ static bool __fastcall MeshDrawObjectHook(void* a1, void* a2, void* meshDraw,
         return original(a1, a2, meshDraw, dataCount, a5, a6, a7, a8);
 
     ++g_meshRenderBackend.targetDraws;
-    SavedMeshState saved[kMaxMeshBatch]{};
+    // CaptureMeshBatch fully initializes every element that can be read below.
+    // Avoid aggregate zero-initialization here: MSVC lowers the 2 KB clear to
+    // an external memset call, which violates the payload's /NODEFAULTLIB build.
+    SavedMeshState saved[kMaxMeshBatch];
     if (!CaptureMeshBatch(meshDraw, dataCount, saved))
     {
         ++g_meshRenderBackend.layoutRejects;
@@ -302,6 +306,10 @@ static bool InstallMeshRenderBackend()
 {
     if (g_meshRenderBackend.installed)
         return true;
+    if (g_meshRenderBackend.installAttempted)
+        return false;
+    g_meshRenderBackend.installAttempted = true;
+
     if (!g_meshRenderBackend.resolved && !ResolveMeshRenderBackend())
         return false;
 
