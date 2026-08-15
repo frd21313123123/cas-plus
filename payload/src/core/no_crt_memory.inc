@@ -3,9 +3,9 @@
 // memcpy/memset calls. Supplying local implementations keeps that optimization
 // compatible with the project's no-CRT/manual-map contract.
 //
-// MSVC recognizes these C runtime names as intrinsics even when /Oi is later
-// disabled by project settings. #pragma function explicitly switches them back
-// to normal callable symbols before their local definitions.
+// C2169 is raised if these symbols are still in intrinsic mode when their local
+// definitions are parsed. #pragma function explicitly switches them back to
+// ordinary callable functions; PotatoPayload.vcxproj also keeps /Oi disabled.
 #pragma function(memcpy, memset)
 
 extern "C" void* __cdecl memcpy(void* destination, const void* source,
