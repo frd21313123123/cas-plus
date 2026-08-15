@@ -56,7 +56,7 @@
       <DataExecutionPrevention>true</DataExecutionPrevention>
     </Link>
     <PreBuildEvent>
-      <Command>powershell -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)tools\apply-chams-render-pipeline.ps1" -InputPath "$(ProjectDir)src\dllmain.cpp" -OutputPath "$(ProjectDir)$(IntDir)dllmain.chams.cpp"</Command>
+      <Command>powershell -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)tools\apply-chams-render-pipeline.ps1" -InputPath "$(ProjectDir)src\dllmain.cpp" -OutputPath "$(ProjectDir)$(IntDir)dllmain.chams.cpp"&#xD;&#xA;powershell -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)tools\apply-feature-suite.ps1" -InputPath "$(ProjectDir)$(IntDir)dllmain.chams.cpp" -OutputPath "$(ProjectDir)$(IntDir)dllmain.features.cpp"</Command>
     </PreBuildEvent>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
@@ -84,11 +84,11 @@
       <DataExecutionPrevention>true</DataExecutionPrevention>
     </Link>
     <PreBuildEvent>
-      <Command>powershell -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)tools\apply-chams-render-pipeline.ps1" -InputPath "$(ProjectDir)src\dllmain.cpp" -OutputPath "$(ProjectDir)$(IntDir)dllmain.chams.cpp"</Command>
+      <Command>powershell -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)tools\apply-chams-render-pipeline.ps1" -InputPath "$(ProjectDir)src\dllmain.cpp" -OutputPath "$(ProjectDir)$(IntDir)dllmain.chams.cpp"&#xD;&#xA;powershell -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)tools\apply-feature-suite.ps1" -InputPath "$(ProjectDir)$(IntDir)dllmain.chams.cpp" -OutputPath "$(ProjectDir)$(IntDir)dllmain.features.cpp"</Command>
     </PreBuildEvent>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <ClCompile Include="$(ProjectDir)$(IntDir)dllmain.chams.cpp" />
+    <ClCompile Include="$(ProjectDir)$(IntDir)dllmain.features.cpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
 </Project>
