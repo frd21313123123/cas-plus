@@ -103,9 +103,6 @@ static unsigned int EnemyOwnerHandleFromSceneObject(void* sceneObject)
     if (!sceneObject || !IsAccessible(sceneObject, 0xF4, false))
         return 0xFFFFFFFFu;
 
-    // Scene-object subtypes have moved the owner handle between builds. Probe
-    // only the narrow set used by current public render implementations and
-    // accept a value solely when it exactly matches the frame-stage registry.
     static const unsigned int kOwnerOffsets[] = {
         0x98, 0xA0, 0xA8, 0xB0, 0xB8, 0xC0,
         0xC8, 0xD0, 0xD8, 0xE0, 0xE8, 0xF0
@@ -255,8 +252,6 @@ static bool __fastcall MeshDrawObjectHook(void* a1, void* a2, void* meshDraw,
         ++g_meshRenderBackend.materialFallbacks;
         if (wantVisible)
         {
-            // Geometry-accurate visible fallback while MaterialManager is not
-            // ready. Occluded rendering remains owned by CGlowProperty.
             BYTE* base = reinterpret_cast<BYTE*>(meshDraw);
             for (int i = 0; i < dataCount; ++i)
             {
@@ -333,8 +328,10 @@ static bool InstallMeshRenderBackend()
     if (!trampolineFlushed)
         return false;
 
-    g_meshRenderBackend.originalDrawObject =
-        reinterpret_cast<SceneDrawObjectFn>(g_drawObjectTrampoline);
+    // Spell out the first byte address; MSVC does not permit a direct
+    // reinterpret_cast from an array type to a function pointer.
+    g_meshRenderBackend.originalDrawObject = reinterpret_cast<SceneDrawObjectFn>(
+        reinterpret_cast<void*>(&g_drawObjectTrampoline[0]));
 
     DWORD targetProtection = 0;
     if (!VirtualProtect(target, kDrawPatchSize, PAGE_EXECUTE_READWRITE,
