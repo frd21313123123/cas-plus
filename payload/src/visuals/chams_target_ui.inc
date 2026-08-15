@@ -4,11 +4,15 @@
 
 static void DrawToggleSwitch(HDC hdc, int x, int y, bool active);
 static void QueueBotHighlight(bool enabled);
+static void DrawChamsRuntimeDiagnostics(HDC hdc);
 
 static void DrawChamsTargetControls(HDC hdc, const ESPConfig& cfg)
 {
+    // Keep this heading below the modal title. The previous layout placed
+    // "Targets" on the same baseline as the title and made the new controls
+    // look like they were not present at all.
     SetTextColor(hdc, RGB_COLOR(161, 161, 170));
-    RECT title = { 385, 122, 600, 143 };
+    RECT title = { 405, 145, 620, 166 };
     DrawTextW(hdc, L"Targets", -1, &title, DT_LEFT | DT_SINGLELINE);
 
     struct TargetRow {
@@ -18,14 +22,14 @@ static void DrawChamsTargetControls(HDC hdc, const ESPConfig& cfg)
         int y;
     };
     const TargetRow rows[] = {
-        { L"Enemy",    cfg.chamsEnemies,        385, 150 },
-        { L"Ally",     cfg.chamsAllies,         385, 178 },
-        { L"Local",    cfg.chamsLocal,          385, 206 },
-        { L"Weapons",  cfg.chamsWeapons,        385, 234 },
-        { L"Hands",    cfg.chamsHands,          500, 150 },
-        { L"Dropped",  cfg.chamsDroppedWeapons, 500, 178 },
-        { L"Nades",    cfg.chamsGrenades,       500, 206 },
-        { L"Bomb",     cfg.chamsBomb,           500, 234 }
+        { L"Enemy",    cfg.chamsEnemies,        405, 170 },
+        { L"Ally",     cfg.chamsAllies,         405, 194 },
+        { L"Local",    cfg.chamsLocal,          405, 218 },
+        { L"Weapons",  cfg.chamsWeapons,        405, 242 },
+        { L"Hands",    cfg.chamsHands,          515, 170 },
+        { L"Dropped",  cfg.chamsDroppedWeapons, 515, 194 },
+        { L"Nades",    cfg.chamsGrenades,       515, 218 },
+        { L"Bomb",     cfg.chamsBomb,           515, 242 }
     };
 
     SetTextColor(hdc, RGB_COLOR(228, 228, 231));
@@ -42,19 +46,19 @@ static void DrawChamsTargetControls(HDC hdc, const ESPConfig& cfg)
 static bool HandleChamsTargetClick(int mouseX, int mouseY)
 {
     bool* target = nullptr;
-    if (mouseX >= 385 && mouseX <= 423)
+    if (mouseX >= 405 && mouseX <= 443)
     {
-        if (mouseY >= 150 && mouseY <= 170) target = &g_espConfig.chamsEnemies;
-        else if (mouseY >= 178 && mouseY <= 198) target = &g_espConfig.chamsAllies;
-        else if (mouseY >= 206 && mouseY <= 226) target = &g_espConfig.chamsLocal;
-        else if (mouseY >= 234 && mouseY <= 254) target = &g_espConfig.chamsWeapons;
+        if (mouseY >= 170 && mouseY <= 190) target = &g_espConfig.chamsEnemies;
+        else if (mouseY >= 194 && mouseY <= 214) target = &g_espConfig.chamsAllies;
+        else if (mouseY >= 218 && mouseY <= 238) target = &g_espConfig.chamsLocal;
+        else if (mouseY >= 242 && mouseY <= 262) target = &g_espConfig.chamsWeapons;
     }
-    else if (mouseX >= 500 && mouseX <= 538)
+    else if (mouseX >= 515 && mouseX <= 553)
     {
-        if (mouseY >= 150 && mouseY <= 170) target = &g_espConfig.chamsHands;
-        else if (mouseY >= 178 && mouseY <= 198) target = &g_espConfig.chamsDroppedWeapons;
-        else if (mouseY >= 206 && mouseY <= 226) target = &g_espConfig.chamsGrenades;
-        else if (mouseY >= 234 && mouseY <= 254) target = &g_espConfig.chamsBomb;
+        if (mouseY >= 170 && mouseY <= 190) target = &g_espConfig.chamsHands;
+        else if (mouseY >= 194 && mouseY <= 214) target = &g_espConfig.chamsDroppedWeapons;
+        else if (mouseY >= 218 && mouseY <= 238) target = &g_espConfig.chamsGrenades;
+        else if (mouseY >= 242 && mouseY <= 262) target = &g_espConfig.chamsBomb;
     }
     if (!target)
         return false;
