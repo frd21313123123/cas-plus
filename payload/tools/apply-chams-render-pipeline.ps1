@@ -58,10 +58,10 @@ $generatedVisualBackend = $targetRegistry + "`r`n" + $materialManager + "`r`n" +
     $meshBackend + "`r`n" + $newPipeline + "`r`n"
 $source = $source.Substring(0, $start) + $generatedVisualBackend + $source.Substring($end)
 
-# Keep target selection in FrameStageNotify. DrawObject consumes only published
-# entity handles. Material creation is also dispatched here so KeyValues3 /
-# MaterialSystem2 calls happen on the CS2 render/game lifecycle rather than the
-# manual-map worker thread.
+# Keep target selection in FrameStageNotify. DrawObject consumes a previously
+# published complete snapshot while a fresh list is built off to the side.
+# Material creation also runs here so KeyValues3/MaterialSystem2 calls stay on
+# the CS2 game/render lifecycle rather than the manual-map worker thread.
 $updateStartAnchor = @'
 static int UpdateBotHighlights(BotHighlightStats* stats)
 {
@@ -71,7 +71,6 @@ $updateStartReplacement = @'
 static int UpdateBotHighlights(BotHighlightStats* stats)
 {
     EnsureMaterialManagerReady();
-    ResetVisualTargets();
     BeginVisualTargetUpdate();
     if (stats)
 '@
@@ -79,6 +78,60 @@ if (-not $source.Contains($updateStartAnchor)) {
     throw 'Visual-target update anchor was not found. Refusing to patch blindly.'
 }
 $source = $source.Replace($updateStartAnchor, $updateStartReplacement)
+
+# Any lifecycle failure publishes an empty snapshot instead of leaving enemy
+# handles from a previous map/session active.
+$runtimeAnchor = @'
+    if (!g_preResolvedEntityRuntimeReady)
+        return BOT_HIGHLIGHT_ERR_RUNTIME;
+'@
+$runtimeReplacement = @'
+    if (!g_preResolvedEntityRuntimeReady)
+    {
+        ResetVisualTargets();
+        return BOT_HIGHLIGHT_ERR_RUNTIME;
+    }
+'@
+if (-not $source.Contains($runtimeAnchor)) {
+    throw 'Entity-runtime failure anchor was not found. Refusing to patch blindly.'
+}
+$source = $source.Replace($runtimeAnchor, $runtimeReplacement)
+
+$schemaAnchor = @'
+        if (!clientModule ||
+            !ResolveBotHighlightRuntime(clientModule, &resolved))
+            return BOT_HIGHLIGHT_ERR_SCHEMA;
+'@
+$schemaReplacement = @'
+        if (!clientModule ||
+            !ResolveBotHighlightRuntime(clientModule, &resolved))
+        {
+            ResetVisualTargets();
+            return BOT_HIGHLIGHT_ERR_SCHEMA;
+        }
+'@
+if (-not $source.Contains($schemaAnchor)) {
+    throw 'Schema failure anchor was not found. Refusing to patch blindly.'
+}
+$source = $source.Replace($schemaAnchor, $schemaReplacement)
+
+$mapAnchor = @'
+    void* entitySystem = CurrentEntitySystem(g_botHighlightRuntime.entity);
+    if (!entitySystem)
+        return BOT_HIGHLIGHT_WAITING_MAP;
+'@
+$mapReplacement = @'
+    void* entitySystem = CurrentEntitySystem(g_botHighlightRuntime.entity);
+    if (!entitySystem)
+    {
+        ResetVisualTargets();
+        return BOT_HIGHLIGHT_WAITING_MAP;
+    }
+'@
+if (-not $source.Contains($mapAnchor)) {
+    throw 'Map wait anchor was not found. Refusing to patch blindly.'
+}
+$source = $source.Replace($mapAnchor, $mapReplacement)
 
 $targetApplyAnchor = @'
         if (stats)
@@ -126,6 +179,7 @@ $oldTeamFallback = @'
 $newTeamFallback = @'
     if (localTeam < 2 || localTeam > 3)
     {
+        ResetVisualTargets();
         RestoreAllBotHighlights(stats);
         return BOT_HIGHLIGHT_WAITING_LOCAL;
     }
@@ -134,6 +188,26 @@ if (-not $source.Contains($oldTeamFallback)) {
     throw 'Local-team fallback anchor was not found. Refusing to patch blindly.'
 }
 $source = $source.Replace($oldTeamFallback, $newTeamFallback)
+
+$localIdentityAnchor = @'
+    if (!localIdentity || localHandle == 0xFFFFFFFFu)
+    {
+        RestoreAllBotHighlights(stats);
+        return BOT_HIGHLIGHT_WAITING_LOCAL;
+    }
+'@
+$localIdentityReplacement = @'
+    if (!localIdentity || localHandle == 0xFFFFFFFFu)
+    {
+        ResetVisualTargets();
+        RestoreAllBotHighlights(stats);
+        return BOT_HIGHLIGHT_WAITING_LOCAL;
+    }
+'@
+if (-not $source.Contains($localIdentityAnchor)) {
+    throw 'Local identity wait anchor was not found. Refusing to patch blindly.'
+}
+$source = $source.Replace($localIdentityAnchor, $localIdentityReplacement)
 
 # The old bot-control bookkeeping no longer participates in target selection.
 $oldBotBookkeeping = @'
