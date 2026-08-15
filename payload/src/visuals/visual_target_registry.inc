@@ -9,7 +9,15 @@ extern "C" LONG _InterlockedCompareExchange(volatile LONG*, LONG, LONG);
 enum VisualTargetKind : unsigned int {
     VISUAL_TARGET_NONE = 0,
     VISUAL_TARGET_ENEMY_PAWN = 1,
-    VISUAL_TARGET_ENEMY_WEAPON = 2
+    VISUAL_TARGET_ENEMY_WEAPON = 2,
+    VISUAL_TARGET_ALLY_PAWN = 3,
+    VISUAL_TARGET_ALLY_WEAPON = 4,
+    VISUAL_TARGET_LOCAL_PAWN = 5,
+    VISUAL_TARGET_LOCAL_WEAPON = 6,
+    VISUAL_TARGET_LOCAL_ARMS = 7,
+    VISUAL_TARGET_DROPPED_WEAPON = 8,
+    VISUAL_TARGET_GRENADE = 9,
+    VISUAL_TARGET_BOMB = 10
 };
 
 struct VisualTargetEntry {
@@ -17,7 +25,7 @@ struct VisualTargetEntry {
     unsigned int kind;
 };
 
-static constexpr int kMaxVisualTargets = 128;
+static constexpr int kMaxVisualTargets = 256;
 
 struct VisualTargetRegistry {
     VisualTargetEntry entries[kMaxVisualTargets];
@@ -45,20 +53,96 @@ static void BeginVisualTargetUpdate()
     g_visualTargetBuildCount = 0;
 }
 
+static int VisualTargetPriority(VisualTargetKind kind)
+{
+    switch (kind)
+    {
+    case VISUAL_TARGET_LOCAL_ARMS: return 100;
+    case VISUAL_TARGET_LOCAL_PAWN: return 95;
+    case VISUAL_TARGET_ENEMY_PAWN: return 90;
+    case VISUAL_TARGET_ALLY_PAWN: return 85;
+    case VISUAL_TARGET_LOCAL_WEAPON: return 80;
+    case VISUAL_TARGET_ENEMY_WEAPON: return 75;
+    case VISUAL_TARGET_ALLY_WEAPON: return 70;
+    case VISUAL_TARGET_BOMB: return 60;
+    case VISUAL_TARGET_GRENADE: return 50;
+    case VISUAL_TARGET_DROPPED_WEAPON: return 40;
+    default: return 0;
+    }
+}
+
+static bool IsPlayerPawnTargetKind(VisualTargetKind kind)
+{
+    return kind == VISUAL_TARGET_ENEMY_PAWN ||
+        kind == VISUAL_TARGET_ALLY_PAWN ||
+        kind == VISUAL_TARGET_LOCAL_PAWN;
+}
+
+static bool IsPlayerWeaponTargetKind(VisualTargetKind kind)
+{
+    return kind == VISUAL_TARGET_ENEMY_WEAPON ||
+        kind == VISUAL_TARGET_ALLY_WEAPON ||
+        kind == VISUAL_TARGET_LOCAL_WEAPON;
+}
+
+static bool IsLocalVisualTargetKind(VisualTargetKind kind)
+{
+    return kind == VISUAL_TARGET_LOCAL_PAWN ||
+        kind == VISUAL_TARGET_LOCAL_WEAPON ||
+        kind == VISUAL_TARGET_LOCAL_ARMS;
+}
+
+static bool VisualTargetKindEnabled(VisualTargetKind kind)
+{
+    switch (kind)
+    {
+    case VISUAL_TARGET_ENEMY_PAWN:
+        return g_espConfig.chamsEnemies;
+    case VISUAL_TARGET_ENEMY_WEAPON:
+        return g_espConfig.chamsEnemies && g_espConfig.chamsWeapons;
+    case VISUAL_TARGET_ALLY_PAWN:
+        return g_espConfig.chamsAllies;
+    case VISUAL_TARGET_ALLY_WEAPON:
+        return g_espConfig.chamsAllies && g_espConfig.chamsWeapons;
+    case VISUAL_TARGET_LOCAL_PAWN:
+        return g_espConfig.chamsLocal;
+    case VISUAL_TARGET_LOCAL_WEAPON:
+        return g_espConfig.chamsWeapons;
+    case VISUAL_TARGET_LOCAL_ARMS:
+        return g_espConfig.chamsHands;
+    case VISUAL_TARGET_DROPPED_WEAPON:
+        return g_espConfig.chamsDroppedWeapons;
+    case VISUAL_TARGET_GRENADE:
+        return g_espConfig.chamsGrenades;
+    case VISUAL_TARGET_BOMB:
+        return g_espConfig.chamsBomb;
+    default:
+        return false;
+    }
+}
+
+static bool VisualTargetAllowsOccludedPass(VisualTargetKind kind)
+{
+    // Local/viewmodel geometry is rendered for cosmetic differentiation only.
+    // Running Ignore-Z on the local pawn, held weapon or HUD arms produces
+    // visually confusing overlays without adding useful wall information.
+    return !IsLocalVisualTargetKind(kind) && kind != VISUAL_TARGET_NONE;
+}
+
 static void AddVisualTarget(unsigned int handle, VisualTargetKind kind)
 {
-    if (handle == 0xFFFFFFFFu || kind == VISUAL_TARGET_NONE)
+    if (handle == 0 || handle == 0xFFFFFFFFu || kind == VISUAL_TARGET_NONE ||
+        !VisualTargetKindEnabled(kind))
         return;
     for (int i = 0; i < g_visualTargetBuildCount; ++i)
     {
-        if (g_visualTargetBuild[i].handle == handle)
-        {
-            // Pawn ownership is stronger than an attached weapon classification
-            // if a transient handle ever appears twice in the same generation.
-            if (kind == VISUAL_TARGET_ENEMY_PAWN)
-                g_visualTargetBuild[i].kind = kind;
-            return;
-        }
+        if (g_visualTargetBuild[i].handle != handle)
+            continue;
+        const VisualTargetKind existing = static_cast<VisualTargetKind>(
+            g_visualTargetBuild[i].kind);
+        if (VisualTargetPriority(kind) > VisualTargetPriority(existing))
+            g_visualTargetBuild[i].kind = kind;
+        return;
     }
     if (g_visualTargetBuildCount >= kMaxVisualTargets)
         return;
@@ -67,35 +151,15 @@ static void AddVisualTarget(unsigned int handle, VisualTargetKind kind)
     entry.kind = kind;
 }
 
-// Compatibility entry used by the legacy monolithic UpdateBotHighlights call
-// site. The richer category expansion happens inside the modular pipeline.
+// Compatibility entry used by the legacy monolithic enemy-controller call site.
 static void AddEnemyVisualTarget(unsigned int handle)
 {
     AddVisualTarget(handle, VISUAL_TARGET_ENEMY_PAWN);
 }
 
-static void AddEnemyPawnVisualTargets(const BotHighlightRuntime& runtime,
-    unsigned int pawnHandle, void* pawn)
-{
-    AddVisualTarget(pawnHandle, VISUAL_TARGET_ENEMY_PAWN);
-    if (!g_espConfig.chamsWeapons || !pawn)
-        return;
-
-    BYTE* pawnBase = reinterpret_cast<BYTE*>(pawn);
-    void** services = reinterpret_cast<void**>(
-        pawnBase + runtime.weaponServicesOffset);
-    if (!IsAccessible(services, sizeof(void*), false) || !*services ||
-        !IsAccessible(*services, runtime.activeWeaponOffset +
-            sizeof(unsigned int), false))
-        return;
-    const unsigned int weaponHandle = *reinterpret_cast<unsigned int*>(
-        reinterpret_cast<BYTE*>(*services) + runtime.activeWeaponOffset);
-    AddVisualTarget(weaponHandle, VISUAL_TARGET_ENEMY_WEAPON);
-}
-
 static VisualTargetKind VisualTargetKindBeingBuilt(unsigned int handle)
 {
-    if (handle == 0xFFFFFFFFu)
+    if (handle == 0 || handle == 0xFFFFFFFFu)
         return VISUAL_TARGET_NONE;
     for (int i = 0; i < g_visualTargetBuildCount; ++i)
     {
@@ -140,7 +204,7 @@ static void ResetVisualTargets()
 
 static VisualTargetKind VisualTargetKindFor(unsigned int handle)
 {
-    if (handle == 0xFFFFFFFFu || !TryLockVisualTargets())
+    if (handle == 0 || handle == 0xFFFFFFFFu || !TryLockVisualTargets())
         return VISUAL_TARGET_NONE;
     const int count = g_visualTargets.count < 0 ? 0 :
         (g_visualTargets.count > kMaxVisualTargets ? kMaxVisualTargets :
@@ -158,9 +222,15 @@ static VisualTargetKind VisualTargetKindFor(unsigned int handle)
     return kind;
 }
 
+static bool IsVisualTarget(unsigned int handle)
+{
+    const VisualTargetKind kind = VisualTargetKindFor(handle);
+    return kind != VISUAL_TARGET_NONE && VisualTargetKindEnabled(kind);
+}
+
 static bool IsEnemyVisualTarget(unsigned int handle)
 {
     const VisualTargetKind kind = VisualTargetKindFor(handle);
-    return kind == VISUAL_TARGET_ENEMY_PAWN ||
-        kind == VISUAL_TARGET_ENEMY_WEAPON;
+    return (kind == VISUAL_TARGET_ENEMY_PAWN ||
+        kind == VISUAL_TARGET_ENEMY_WEAPON) && VisualTargetKindEnabled(kind);
 }
