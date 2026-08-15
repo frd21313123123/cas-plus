@@ -147,10 +147,11 @@ static bool ApplyModelPasses(const BotHighlightRuntime& runtime,
 
     const ChamsPassPlan plan = BuildChamsPassPlan(allowVisiblePass,
         allowOccludedPass);
-    const bool enemyMeshTarget = IsEnemyVisualTarget(entityHandle);
+    // During this FrameStage update the new snapshot is not published yet, so
+    // use the private builder for ownership decisions. DrawObject itself only
+    // reads the previously published immutable snapshot.
+    const bool enemyMeshTarget = IsEnemyVisualTargetBeingBuilt(entityHandle);
 
-    // Once DrawObject owns an enemy mesh, keep replicated entity tint original.
-    // The mesh backend applies and restores color per draw call instead.
     const bool meshOwnsVisiblePass = plan.visibleMaterial &&
         g_meshRenderBackend.installed && enemyMeshTarget;
     if (meshOwnsVisiblePass)
@@ -176,8 +177,8 @@ static bool ApplyModelPasses(const BotHighlightRuntime& runtime,
 
     if (materialOwnsOccludedPass)
     {
-        // True Ignore-Z mesh Chams already owns the wall pass. Standalone Glow
-        // remains independent and may be layered on top if explicitly enabled.
+        // True Ignore-Z mesh Chams owns the wall pass. Standalone Glow remains
+        // independent and may be layered on top only when explicitly enabled.
         if (plan.glowHighlight)
         {
             ApplyHighlightPass(runtime, glowBase, g_espConfig.glowColor,
