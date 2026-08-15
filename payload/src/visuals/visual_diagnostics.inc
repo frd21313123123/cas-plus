@@ -1,6 +1,6 @@
 // Compact renderer diagnostics appended to the existing Visuals status label.
 // Counters are monotonic so a runtime test can distinguish hook resolution,
-// target classification, material creation, mixed batches and patch failures.
+// target classification, ownership confirmation and patch safety deferrals.
 
 static void AppendVisualRendererDiagnostics(WideStatusBuilder* status)
 {
@@ -28,6 +28,12 @@ static void AppendVisualRendererDiagnostics(WideStatusBuilder* status)
     AppendStatusUnsigned(status, g_visualTargetCollectorStats.worldScans);
     AppendStatusText(status, L", mix ");
     AppendStatusUnsigned(status, g_meshRenderBackend.mixedBatches);
+    AppendStatusText(status, L", rip ");
+    AppendStatusUnsigned(status, g_meshRenderBackend.ripDeferrals);
+    AppendStatusText(status, L", ownrej ");
+    AppendStatusUnsigned(status, g_meshRenderBackend.ownershipRejects);
+    AppendStatusText(status, L", snap ");
+    AppendStatusUnsigned(status, g_meshRenderBackend.snapshotMisses);
     AppendStatusText(status, L", pf ");
     AppendStatusUnsigned(status, g_meshRenderBackend.patchFailures);
     AppendStatusText(status, L", fb ");
