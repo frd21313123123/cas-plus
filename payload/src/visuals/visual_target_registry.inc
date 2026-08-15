@@ -228,6 +228,18 @@ static int CopyVisualTargetSnapshot(VisualTargetEntry* destination,
     return count;
 }
 
+// FrameStage uses this only to decide whether a mesh confirmation belongs to
+// the currently published or immediately preceding generation. Lock failure is
+// fail-closed: the legacy path remains active for that update.
+static bool ReadPublishedVisualGeneration(unsigned int* generation)
+{
+    if (!generation || !TryLockVisualTargets())
+        return false;
+    *generation = g_visualTargets.generation;
+    UnlockVisualTargets();
+    return true;
+}
+
 static VisualTargetKind VisualTargetKindFromSnapshot(unsigned int handle,
     const VisualTargetEntry* snapshot, int count)
 {
