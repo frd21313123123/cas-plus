@@ -53,6 +53,7 @@
       <EntryPointSymbol>DllMain</EntryPointSymbol>
       <IgnoreAllDefaultLibraries>true</IgnoreAllDefaultLibraries>
       <AdditionalDependencies>kernel32.lib;user32.lib;gdi32.lib</AdditionalDependencies>
+      <AdditionalOptions>/alternatename:memcpy=CasPlusMemcpy /alternatename:memset=CasPlusMemset %(AdditionalOptions)</AdditionalOptions>
       <RandomizedBaseAddress>true</RandomizedBaseAddress>
       <DataExecutionPrevention>true</DataExecutionPrevention>
     </Link>
@@ -64,9 +65,8 @@
     <ClCompile>
       <WarningLevel>Level3</WarningLevel>
       <FunctionLevelLinking>true</FunctionLevelLinking>
-      <!-- /O2 implies /Oi unless explicitly disabled. This payload intentionally
-           supplies no-CRT memcpy/memset and links /NODEFAULTLIB, so keep calls
-           as functions instead of treating those symbols as compiler intrinsics. -->
+      <!-- Keep optimizer-generated memory operations as ordinary symbol calls;
+           the linker aliases those CRT names to local no-CRT implementations. -->
       <IntrinsicFunctions>false</IntrinsicFunctions>
       <SDLCheck>true</SDLCheck>
       <PreprocessorDefinitions>NDEBUG;_WINDOWS;_USRDLL;%(PreprocessorDefinitions)</PreprocessorDefinitions>
@@ -84,6 +84,7 @@
       <EntryPointSymbol>DllMain</EntryPointSymbol>
       <IgnoreAllDefaultLibraries>true</IgnoreAllDefaultLibraries>
       <AdditionalDependencies>kernel32.lib;user32.lib;gdi32.lib</AdditionalDependencies>
+      <AdditionalOptions>/alternatename:memcpy=CasPlusMemcpy /alternatename:memset=CasPlusMemset %(AdditionalOptions)</AdditionalOptions>
       <RandomizedBaseAddress>true</RandomizedBaseAddress>
       <DataExecutionPrevention>true</DataExecutionPrevention>
     </Link>
