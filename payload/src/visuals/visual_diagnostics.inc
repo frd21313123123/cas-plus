@@ -1,3 +1,5 @@
+#pragma auto_inline(on)
+
 // Compact renderer diagnostics appended to the existing Visuals status label.
 // Counters are monotonic so a runtime test can distinguish hook resolution,
 // target classification, ownership confirmation and patch safety deferrals.
