@@ -11,15 +11,16 @@ $ErrorActionPreference = 'Stop'
 $source = Get-Content -LiteralPath $InputPath -Raw -Encoding UTF8
 $sourceDirectory = Split-Path -Parent $InputPath
 $pipelinePath = Join-Path $sourceDirectory 'visuals\chams_render_pipeline.inc'
-$meshProbePath = Join-Path $sourceDirectory 'visuals\mesh_render_probe.inc'
-if (-not (Test-Path -LiteralPath $pipelinePath)) {
-    throw "Chams render pipeline module was not found: $pipelinePath"
-}
-if (-not (Test-Path -LiteralPath $meshProbePath)) {
-    throw "Mesh render probe module was not found: $meshProbePath"
+$targetRegistryPath = Join-Path $sourceDirectory 'visuals\visual_target_registry.inc'
+$meshBackendPath = Join-Path $sourceDirectory 'visuals\mesh_render_probe.inc'
+foreach ($requiredPath in @($pipelinePath, $targetRegistryPath, $meshBackendPath)) {
+    if (-not (Test-Path -LiteralPath $requiredPath)) {
+        throw "Visual renderer module was not found: $requiredPath"
+    }
 }
 $newPipeline = Get-Content -LiteralPath $pipelinePath -Raw -Encoding UTF8
-$meshProbe = Get-Content -LiteralPath $meshProbePath -Raw -Encoding UTF8
+$targetRegistry = Get-Content -LiteralPath $targetRegistryPath -Raw -Encoding UTF8
+$meshBackend = Get-Content -LiteralPath $meshBackendPath -Raw -Encoding UTF8
 
 $oldConfig = @'
     bool chams = true;
@@ -30,12 +31,12 @@ $oldConfig = @'
 
 $newConfig = @'
     bool chams = true;
-    // Visible material pass stays depth-tested and therefore follows the model
-    // geometry only where the scene depth buffer allows it to be seen.
+    // The mesh renderer owns the normal depth-tested player pass whenever its
+    // guarded DrawObject trampoline is installed. Frame-stage tint remains the
+    // compatibility fallback when the scene-system entry cannot be resolved.
     RGBVal chamsColorVisible = { 132, 204, 22 };
-    // The current compatibility backend uses Source 2 screen highlight here.
-    // It is isolated behind ChamsPassPlan so a real Ignore-Z mesh backend can
-    // replace it without changing target selection or standalone Glow.
+    // Occluded rendering remains the screen-highlight compatibility backend
+    // until the MaterialManager can supply an Ignore-Z material pair.
     RGBVal chamsColorOccluded = { 239, 68, 68 };
     // 0: Visible + Occluded, 1: Visible Only, 2: Occluded Only,
     // 3: legacy Glow Only compatibility mode.
@@ -54,8 +55,64 @@ $end = $source.IndexOf($endAnchor)
 if ($start -lt 0 -or $end -le $start) {
     throw 'ApplyModelPasses anchors were not found. The payload source changed; refusing to patch blindly.'
 }
-$generatedVisualBackend = $meshProbe + "`r`n" + $newPipeline + "`r`n"
+$generatedVisualBackend = $targetRegistry + "`r`n" + $meshBackend + "`r`n" +
+    $newPipeline + "`r`n"
 $source = $source.Substring(0, $start) + $generatedVisualBackend + $source.Substring($end)
+
+# Keep target selection in FrameStageNotify. DrawObject consumes only the
+# published full entity handles and performs no controller/schema scan itself.
+$updateStartAnchor = @'
+static int UpdateBotHighlights(BotHighlightStats* stats)
+{
+    if (stats)
+'@
+$updateStartReplacement = @'
+static int UpdateBotHighlights(BotHighlightStats* stats)
+{
+    ResetVisualTargets();
+    BeginVisualTargetUpdate();
+    if (stats)
+'@
+if (-not $source.Contains($updateStartAnchor)) {
+    throw 'Visual-target update anchor was not found. Refusing to patch blindly.'
+}
+$source = $source.Replace($updateStartAnchor, $updateStartReplacement)
+
+$targetApplyAnchor = @'
+        if (stats)
+            ++stats->botCandidates;
+        if (ApplyBotHighlight(g_botHighlightRuntime, *pawnHandle, pawn) &&
+            stats)
+            ++stats->highlighted;
+'@
+$targetApplyReplacement = @'
+        if (stats)
+            ++stats->botCandidates;
+        AddEnemyVisualTarget(*pawnHandle);
+        if (ApplyBotHighlight(g_botHighlightRuntime, *pawnHandle, pawn) &&
+            stats)
+            ++stats->highlighted;
+'@
+if (-not $source.Contains($targetApplyAnchor)) {
+    throw 'Enemy visual-target publication anchor was not found. Refusing to patch blindly.'
+}
+$source = $source.Replace($targetApplyAnchor, $targetApplyReplacement)
+
+$publishAnchor = @'
+    ApplyActiveWeaponChams(g_botHighlightRuntime, entitySystem, localPawn);
+
+    int destination = 0;
+'@
+$publishReplacement = @'
+    ApplyActiveWeaponChams(g_botHighlightRuntime, entitySystem, localPawn);
+    PublishVisualTargets();
+
+    int destination = 0;
+'@
+if (-not $source.Contains($publishAnchor)) {
+    throw 'Visual-target publish anchor was not found. Refusing to patch blindly.'
+}
+$source = $source.Replace($publishAnchor, $publishReplacement)
 
 # Do not invent a team when the local controller is not ready. A forced CT
 # fallback could classify teammates as enemies during connect/map transitions.
@@ -78,8 +135,6 @@ if (-not $source.Contains($oldTeamFallback)) {
 $source = $source.Replace($oldTeamFallback, $newTeamFallback)
 
 # The old bot-control bookkeeping no longer participates in target selection.
-# Keeping it made the player renderer look bot-specific and performed needless
-# schema reads every refresh.
 $oldBotBookkeeping = @'
     unsigned int humanControlledPawns[kControllerSlotLimit];
     ZeroBytes(humanControlledPawns, sizeof(humanControlledPawns));
@@ -104,10 +159,9 @@ if (-not $source.Contains($oldBotBookkeeping)) {
 }
 $source = $source.Replace($oldBotBookkeeping, '')
 
-# ESPConfig defaults must become active immediately after the bridge is ready;
-# previously Chams could appear enabled in the UI while the backend stayed off
-# until the user clicked a visual setting. Probe the scene-system render entry
-# at the same lifecycle boundary; it is only a capability check, not a detour.
+# Install the mesh backend only after the existing frame-stage/schema runtime is
+# ready. Failure is non-fatal: frame-stage tint + screen highlight remain the
+# compatibility path.
 $startupAnchor = @'
     if (!InstallFrameStageBridge())
     {
@@ -124,7 +178,7 @@ $startupReplacement = @'
     }
     else
     {
-        ResolveMeshRenderBackend();
+        InstallMeshRenderBackend();
         const bool modelEffects = g_espConfig.enable &&
             (g_espConfig.chams || g_espConfig.glow);
         g_botHighlightEnabled = modelEffects;
@@ -137,7 +191,8 @@ if (-not $source.Contains($startupAnchor)) {
 }
 $source = $source.Replace($startupAnchor, $startupReplacement)
 
-# Restore entity render/glow state before detaching the frame-stage hook.
+# Restore every state owner in reverse order: model/glow bytes, DrawObject
+# detour, target registry, then the frame-stage vtable bridge.
 $shutdownAnchor = @'
     RemoveFrameStageBridge();
     return 0;
@@ -145,6 +200,8 @@ $shutdownAnchor = @'
 $shutdownReplacement = @'
     if (g_botHighlightRuntimeReady && g_originalBotHighlightCount > 0)
         RestoreAllBotHighlights(nullptr);
+    RemoveMeshRenderBackend();
+    ResetVisualTargets();
     g_meshRenderBackend.drawObjectTarget = nullptr;
     g_meshRenderBackend.resolved = false;
     RemoveFrameStageBridge();
@@ -161,7 +218,7 @@ $source = $source.Replace(
 
 $source = $source.Replace(
     'L"Chams: model + through-wall passes active"',
-    'L"Chams: visible pass + occluded backend active"')
+    'L"Chams: mesh-visible + occluded compatibility backend"')
 
 $outputDirectory = Split-Path -Parent $OutputPath
 if ($outputDirectory) {
@@ -169,4 +226,4 @@ if ($outputDirectory) {
 }
 
 Set-Content -LiteralPath $OutputPath -Value $source -Encoding UTF8 -NoNewline
-Write-Host "Generated modular Chams render-pipeline source: $OutputPath"
+Write-Host "Generated modular visual render-pipeline source: $OutputPath"
