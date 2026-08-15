@@ -1,6 +1,6 @@
 // Generated into dllmain.cpp's translation unit by apply-chams-render-pipeline.ps1.
-// Keep this file CRT-free and dependent only on types/helpers declared before
-// ApplyModelPasses in dllmain.cpp.
+// Keep this module CRT-free. FrameStageNotify owns compatibility entity state;
+// the scene-system hook owns per-draw mesh state when available.
 
 struct ChamsPassPlan {
     bool visibleMaterial;
@@ -10,7 +10,7 @@ struct ChamsPassPlan {
 
 struct ChamsRenderStats {
     unsigned int modelUpdates;
-    unsigned int visiblePasses;
+    unsigned int visibleFallbackPasses;
     unsigned int occludedPasses;
     unsigned int glowPasses;
     unsigned int restores;
@@ -45,8 +45,8 @@ static ChamsPassPlan BuildChamsPassPlan(bool allowVisiblePass,
         }
     }
 
-    // Glow is intentionally independent from Chams. The legacy style value 3
-    // is retained as a compatibility alias for Glow Only configs.
+    // Glow is independent from Chams. Style 3 remains only as a compatibility
+    // alias for old configs that encoded Glow Only inside the Chams selector.
     if ((g_espConfig.glow || (g_espConfig.chams && g_espConfig.chamsStyle == 3)) &&
         allowOccludedPass)
         plan.glowHighlight = true;
@@ -66,7 +66,7 @@ static void RestoreVisibleMaterialPass(const BotHighlightRuntime& runtime,
     ++g_chamsRenderStats.restores;
 }
 
-static void ApplyVisibleMaterialPass(const BotHighlightRuntime& runtime,
+static void ApplyVisibleFallbackPass(const BotHighlightRuntime& runtime,
     void* modelEntity, BYTE* renderColor, BYTE* clientTint,
     BYTE* useClientTint)
 {
@@ -80,7 +80,7 @@ static void ApplyVisibleMaterialPass(const BotHighlightRuntime& runtime,
     CopyFourBytes(clientTint, visible);
     *useClientTint = 1;
     runtime.setRenderColor(modelEntity, visible[0], visible[1], visible[2]);
-    ++g_chamsRenderStats.visiblePasses;
+    ++g_chamsRenderStats.visibleFallbackPasses;
 }
 
 static void RestoreHighlightPass(const BotHighlightRuntime& runtime,
@@ -148,20 +148,34 @@ static bool ApplyModelPasses(const BotHighlightRuntime& runtime,
     const ChamsPassPlan plan = BuildChamsPassPlan(allowVisiblePass,
         allowOccludedPass);
 
-    if (plan.visibleMaterial)
-        ApplyVisibleMaterialPass(runtime, modelEntity, renderColor, clientTint,
-            useClientTint);
-    else
+    // Enemy player meshes are tinted at the actual DrawObject call when the
+    // guarded scene-system backend is live. Keep the entity's replicated render
+    // color original in that case, so there is one clear owner for visible
+    // color. Weapons/local models still use the compatibility entity tint.
+    const bool meshOwnsVisiblePass = plan.visibleMaterial &&
+        g_meshRenderBackend.installed && IsEnemyVisualTarget(entityHandle);
+    if (meshOwnsVisiblePass)
+    {
         RestoreVisibleMaterialPass(runtime, modelEntity, *original, renderColor,
             clientTint, useClientTint);
+    }
+    else if (plan.visibleMaterial)
+    {
+        ApplyVisibleFallbackPass(runtime, modelEntity, renderColor, clientTint,
+            useClientTint);
+    }
+    else
+    {
+        RestoreVisibleMaterialPass(runtime, modelEntity, *original, renderColor,
+            clientTint, useClientTint);
+    }
 
     BYTE* glowBase = reinterpret_cast<BYTE*>(modelEntity) + runtime.glowOffset;
     if (plan.occludedHighlight)
     {
-        // The current backend still uses Source 2 screen highlight for the
-        // occluded leg. Keeping this isolated behind the pass planner makes it
-        // replaceable by a true Ignore-Z mesh pass without touching target
-        // selection, lifecycle, or standalone Glow.
+        // Compatibility backend only. MaterialManager will replace this branch
+        // with a true Ignore-Z mesh draw once runtime material creation is
+        // verified on the current CS2 build.
         ApplyHighlightPass(runtime, glowBase, g_espConfig.chamsColorOccluded,
             eligible, glowing, false);
     }
@@ -176,6 +190,6 @@ static bool ApplyModelPasses(const BotHighlightRuntime& runtime,
             eligible, glowing);
     }
 
-    return plan.visibleMaterial || plan.occludedHighlight ||
-        plan.glowHighlight;
+    return meshOwnsVisiblePass || plan.visibleMaterial ||
+        plan.occludedHighlight || plan.glowHighlight;
 }
