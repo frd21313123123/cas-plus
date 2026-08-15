@@ -28,7 +28,7 @@ static void AppendVisualRendererDiagnostics(WideStatusBuilder* status)
     AppendStatusUnsigned(status, g_visualTargetCollectorStats.worldScans);
     AppendStatusText(status, L", mix ");
     AppendStatusUnsigned(status, g_meshRenderBackend.mixedBatches);
-    AppendStatusText(status, L", patchfail ");
+    AppendStatusText(status, L", pf ");
     AppendStatusUnsigned(status, g_meshRenderBackend.patchFailures);
     AppendStatusText(status, L", fb ");
     AppendStatusUnsigned(status, g_meshRenderBackend.materialFallbacks);
