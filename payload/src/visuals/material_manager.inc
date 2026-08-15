@@ -1,8 +1,8 @@
 // Runtime Source 2 material manager for mesh Chams.
 //
 // Creates independent visible/Ignore-Z material pairs through KeyValues3 and
-// MaterialSystem2. All engine entry points are resolved fail-closed. Flat is
-// the mandatory baseline; optional presets fall back to Flat per pass.
+// MaterialSystem2. Module-loading failures are transient; signature/layout
+// resolution is attempted only after all required modules are present.
 
 enum ChamsMaterialPreset {
     CHAMS_MATERIAL_FLAT = 0,
@@ -35,11 +35,11 @@ struct MaterialManagerState {
     CreateRuntimeMaterialFn createMaterial;
     SetTypeKv3Fn setTypeKv3;
     RuntimeMaterialPair presets[CHAMS_MATERIAL_COUNT];
-    // These two are the selected pass pointers consumed by the mesh backend.
-    // Their old names are retained temporarily to keep this migration small.
+    // Selected material pointers consumed by the mesh backend.
     void* flatVisible;
     void* flatOccluded;
     bool resolveAttempted;
+    bool materialCreationAttempted;
     bool functionsReady;
     bool materialsReady;
     unsigned int resolveFailures;
@@ -59,33 +59,139 @@ static void ZeroMaterialStorage(BYTE* destination, SIZE_T size)
         cursor[i] = 0;
 }
 
-static const char kFlatVisibleVmat[] =
-"<!-- kv3 encoding:text:version{e21c7f3c-8a33-41c5-9977-a76d3a32aa0d} format:generic:version{7412167c-06e9-4698-aff2-e63eb59037e7} -->\n"
-"{\n shader = \"csgo_unlitgeneric.vfx\"\n F_PAINT_VERTEX_COLORS = 1\n F_TRANSLUCENT = 1\n F_BLEND_MODE = 1\n g_vColorTint = [1.0, 1.0, 1.0, 1.0]\n g_tColor = resource:\"materials/default/default_mask_tga_fde710a5.vtex\"\n g_tNormal = resource:\"materials/default/default_normal_tga_1b833b2a.vtex\"\n g_tTintMask = resource:\"materials/default/default_mask_tga_fde710a5.vtex\"\n}\n";
-static const char kFlatOccludedVmat[] =
-"<!-- kv3 encoding:text:version{e21c7f3c-8a33-41c5-9977-a76d3a32aa0d} format:generic:version{7412167c-06e9-4698-aff2-e63eb59037e7} -->\n"
-"{\n shader = \"csgo_unlitgeneric.vfx\"\n F_PAINT_VERTEX_COLORS = 1\n F_TRANSLUCENT = 1\n F_BLEND_MODE = 1\n F_DISABLE_Z_BUFFERING = 1\n F_DISABLE_Z_PREPASS = 1\n F_DISABLE_Z_WRITE = 1\n g_vColorTint = [1.0, 1.0, 1.0, 1.0]\n g_tColor = resource:\"materials/default/default_mask_tga_fde710a5.vtex\"\n g_tNormal = resource:\"materials/default/default_normal_tga_1b833b2a.vtex\"\n g_tTintMask = resource:\"materials/default/default_mask_tga_fde710a5.vtex\"\n}\n";
+static const char kFlatVisibleVmat[] = R"CASMAT(<!-- kv3 encoding:text:version{e21c7f3c-8a33-41c5-9977-a76d3a32aa0d} format:generic:version{7412167c-06e9-4698-aff2-e63eb59037e7} -->
+{
+ shader = "csgo_unlitgeneric.vfx"
+ F_PAINT_VERTEX_COLORS = 1
+ F_TRANSLUCENT = 1
+ F_BLEND_MODE = 1
+ g_vColorTint = [1.0, 1.0, 1.0, 1.0]
+ g_tColor = resource:"materials/default/default_mask_tga_fde710a5.vtex"
+ g_tNormal = resource:"materials/default/default_normal_tga_1b833b2a.vtex"
+ g_tTintMask = resource:"materials/default/default_mask_tga_fde710a5.vtex"
+}
+)CASMAT";
 
-static const char kShadedVisibleVmat[] =
-"<!-- kv3 encoding:text:version{e21c7f3c-8a33-41c5-9977-a76d3a32aa0d} format:generic:version{7412167c-06e9-4698-aff2-e63eb59037e7} -->\n"
-"{\n shader = \"csgo_character.vfx\"\n F_PAINT_VERTEX_COLORS = 1\n F_TRANSLUCENT = 1\n F_BLEND_MODE = 1\n g_vColorTint = [1.0, 1.0, 1.0, 1.0]\n g_bFogEnabled = 0\n g_flMetalness = 0.0\n g_flRoughness = 0.28\n g_tColor = resource:\"materials/dev/primary_white_color_tga_21186c76.vtex\"\n g_tNormal = resource:\"materials/default/default_normal_tga_1b833b2a.vtex\"\n g_tMetalness = resource:\"materials/default/default_metal_tga_8fbc2820.vtex\"\n}\n";
-static const char kShadedOccludedVmat[] =
-"<!-- kv3 encoding:text:version{e21c7f3c-8a33-41c5-9977-a76d3a32aa0d} format:generic:version{7412167c-06e9-4698-aff2-e63eb59037e7} -->\n"
-"{\n shader = \"csgo_character.vfx\"\n F_PAINT_VERTEX_COLORS = 1\n F_TRANSLUCENT = 1\n F_BLEND_MODE = 1\n F_DISABLE_Z_BUFFERING = 1\n F_DISABLE_Z_PREPASS = 1\n F_DISABLE_Z_WRITE = 1\n g_vColorTint = [1.0, 1.0, 1.0, 1.0]\n g_bFogEnabled = 0\n g_flMetalness = 0.0\n g_flRoughness = 0.28\n g_tColor = resource:\"materials/dev/primary_white_color_tga_21186c76.vtex\"\n g_tNormal = resource:\"materials/default/default_normal_tga_1b833b2a.vtex\"\n g_tMetalness = resource:\"materials/default/default_metal_tga_8fbc2820.vtex\"\n}\n";
+static const char kFlatOccludedVmat[] = R"CASMAT(<!-- kv3 encoding:text:version{e21c7f3c-8a33-41c5-9977-a76d3a32aa0d} format:generic:version{7412167c-06e9-4698-aff2-e63eb59037e7} -->
+{
+ shader = "csgo_unlitgeneric.vfx"
+ F_PAINT_VERTEX_COLORS = 1
+ F_TRANSLUCENT = 1
+ F_BLEND_MODE = 1
+ F_DISABLE_Z_BUFFERING = 1
+ F_DISABLE_Z_PREPASS = 1
+ F_DISABLE_Z_WRITE = 1
+ g_vColorTint = [1.0, 1.0, 1.0, 1.0]
+ g_tColor = resource:"materials/default/default_mask_tga_fde710a5.vtex"
+ g_tNormal = resource:"materials/default/default_normal_tga_1b833b2a.vtex"
+ g_tTintMask = resource:"materials/default/default_mask_tga_fde710a5.vtex"
+}
+)CASMAT";
 
-static const char kMetallicVisibleVmat[] =
-"<!-- kv3 encoding:text:version{e21c7f3c-8a33-41c5-9977-a76d3a32aa0d} format:generic:version{7412167c-06e9-4698-aff2-e63eb59037e7} -->\n"
-"{\n shader = \"csgo_complex.vfx\"\n F_PAINT_VERTEX_COLORS = 1\n F_TRANSLUCENT = 1\n F_BLEND_MODE = 1\n g_vColorTint = [1.0, 1.0, 1.0, 1.0]\n g_flMetalness = 1.0\n g_flRoughness = 0.18\n g_tColor = resource:\"materials/dev/primary_white_color_tga_21186c76.vtex\"\n g_tNormal = resource:\"materials/default/default_normal_tga_1b833b2a.vtex\"\n g_tMetalness = resource:\"materials/default/default_metal_tga_8fbc2820.vtex\"\n}\n";
-static const char kMetallicOccludedVmat[] =
-"<!-- kv3 encoding:text:version{e21c7f3c-8a33-41c5-9977-a76d3a32aa0d} format:generic:version{7412167c-06e9-4698-aff2-e63eb59037e7} -->\n"
-"{\n shader = \"csgo_complex.vfx\"\n F_PAINT_VERTEX_COLORS = 1\n F_TRANSLUCENT = 1\n F_BLEND_MODE = 1\n F_DISABLE_Z_BUFFERING = 1\n F_DISABLE_Z_PREPASS = 1\n F_DISABLE_Z_WRITE = 1\n g_vColorTint = [1.0, 1.0, 1.0, 1.0]\n g_flMetalness = 1.0\n g_flRoughness = 0.18\n g_tColor = resource:\"materials/dev/primary_white_color_tga_21186c76.vtex\"\n g_tNormal = resource:\"materials/default/default_normal_tga_1b833b2a.vtex\"\n g_tMetalness = resource:\"materials/default/default_metal_tga_8fbc2820.vtex\"\n}\n";
+static const char kShadedVisibleVmat[] = R"CASMAT(<!-- kv3 encoding:text:version{e21c7f3c-8a33-41c5-9977-a76d3a32aa0d} format:generic:version{7412167c-06e9-4698-aff2-e63eb59037e7} -->
+{
+ shader = "csgo_character.vfx"
+ F_PAINT_VERTEX_COLORS = 1
+ F_TRANSLUCENT = 1
+ F_BLEND_MODE = 1
+ g_vColorTint = [1.0, 1.0, 1.0, 1.0]
+ g_bFogEnabled = 0
+ g_flMetalness = 0.0
+ g_flRoughness = 0.28
+ g_tColor = resource:"materials/dev/primary_white_color_tga_21186c76.vtex"
+ g_tNormal = resource:"materials/default/default_normal_tga_1b833b2a.vtex"
+ g_tMetalness = resource:"materials/default/default_metal_tga_8fbc2820.vtex"
+}
+)CASMAT";
 
-static const char kGlowVisibleVmat[] =
-"<!-- kv3 encoding:text:version{e21c7f3c-8a33-41c5-9977-a76d3a32aa0d} format:generic:version{7412167c-06e9-4698-aff2-e63eb59037e7} -->\n"
-"{\n shader = \"csgo_complex.vfx\"\n F_SELF_ILLUM = 1\n F_PAINT_VERTEX_COLORS = 1\n F_TRANSLUCENT = 1\n F_BLEND_MODE = 1\n g_vColorTint = [1.0, 1.0, 1.0, 1.0]\n g_vSelfIllumTint = [1.0, 1.0, 1.0, 1.0]\n g_flSelfIllumScale = [4.0, 4.0, 4.0, 4.0]\n g_flSelfIllumBrightness = [3.0, 3.0, 3.0, 3.0]\n g_tColor = resource:\"materials/dev/primary_white_color_tga_21186c76.vtex\"\n g_tNormal = resource:\"materials/default/default_normal_tga_1b833b2a.vtex\"\n g_tSelfIllumMask = resource:\"materials/default/default_mask_tga_fde710a5.vtex\"\n}\n";
-static const char kGlowOccludedVmat[] =
-"<!-- kv3 encoding:text:version{e21c7f3c-8a33-41c5-9977-a76d3a32aa0d} format:generic:version{7412167c-06e9-4698-aff2-e63eb59037e7} -->\n"
-"{\n shader = \"csgo_complex.vfx\"\n F_SELF_ILLUM = 1\n F_PAINT_VERTEX_COLORS = 1\n F_TRANSLUCENT = 1\n F_BLEND_MODE = 1\n F_DISABLE_Z_BUFFERING = 1\n F_DISABLE_Z_PREPASS = 1\n F_DISABLE_Z_WRITE = 1\n g_vColorTint = [1.0, 1.0, 1.0, 1.0]\n g_vSelfIllumTint = [1.0, 1.0, 1.0, 1.0]\n g_flSelfIllumScale = [4.0, 4.0, 4.0, 4.0]\n g_flSelfIllumBrightness = [3.0, 3.0, 3.0, 3.0]\n g_tColor = resource:\"materials/dev/primary_white_color_tga_21186c76.vtex\"\n g_tNormal = resource:\"materials/default/default_normal_tga_1b833b2a.vtex\"\n g_tSelfIllumMask = resource:\"materials/default/default_mask_tga_fde710a5.vtex\"\n}\n";
+static const char kShadedOccludedVmat[] = R"CASMAT(<!-- kv3 encoding:text:version{e21c7f3c-8a33-41c5-9977-a76d3a32aa0d} format:generic:version{7412167c-06e9-4698-aff2-e63eb59037e7} -->
+{
+ shader = "csgo_character.vfx"
+ F_PAINT_VERTEX_COLORS = 1
+ F_TRANSLUCENT = 1
+ F_BLEND_MODE = 1
+ F_DISABLE_Z_BUFFERING = 1
+ F_DISABLE_Z_PREPASS = 1
+ F_DISABLE_Z_WRITE = 1
+ g_vColorTint = [1.0, 1.0, 1.0, 1.0]
+ g_bFogEnabled = 0
+ g_flMetalness = 0.0
+ g_flRoughness = 0.28
+ g_tColor = resource:"materials/dev/primary_white_color_tga_21186c76.vtex"
+ g_tNormal = resource:"materials/default/default_normal_tga_1b833b2a.vtex"
+ g_tMetalness = resource:"materials/default/default_metal_tga_8fbc2820.vtex"
+}
+)CASMAT";
+
+static const char kMetallicVisibleVmat[] = R"CASMAT(<!-- kv3 encoding:text:version{e21c7f3c-8a33-41c5-9977-a76d3a32aa0d} format:generic:version{7412167c-06e9-4698-aff2-e63eb59037e7} -->
+{
+ shader = "csgo_complex.vfx"
+ F_PAINT_VERTEX_COLORS = 1
+ F_TRANSLUCENT = 1
+ F_BLEND_MODE = 1
+ g_vColorTint = [1.0, 1.0, 1.0, 1.0]
+ g_flMetalness = 1.0
+ g_flRoughness = 0.18
+ g_tColor = resource:"materials/dev/primary_white_color_tga_21186c76.vtex"
+ g_tNormal = resource:"materials/default/default_normal_tga_1b833b2a.vtex"
+ g_tMetalness = resource:"materials/default/default_metal_tga_8fbc2820.vtex"
+}
+)CASMAT";
+
+static const char kMetallicOccludedVmat[] = R"CASMAT(<!-- kv3 encoding:text:version{e21c7f3c-8a33-41c5-9977-a76d3a32aa0d} format:generic:version{7412167c-06e9-4698-aff2-e63eb59037e7} -->
+{
+ shader = "csgo_complex.vfx"
+ F_PAINT_VERTEX_COLORS = 1
+ F_TRANSLUCENT = 1
+ F_BLEND_MODE = 1
+ F_DISABLE_Z_BUFFERING = 1
+ F_DISABLE_Z_PREPASS = 1
+ F_DISABLE_Z_WRITE = 1
+ g_vColorTint = [1.0, 1.0, 1.0, 1.0]
+ g_flMetalness = 1.0
+ g_flRoughness = 0.18
+ g_tColor = resource:"materials/dev/primary_white_color_tga_21186c76.vtex"
+ g_tNormal = resource:"materials/default/default_normal_tga_1b833b2a.vtex"
+ g_tMetalness = resource:"materials/default/default_metal_tga_8fbc2820.vtex"
+}
+)CASMAT";
+
+static const char kGlowVisibleVmat[] = R"CASMAT(<!-- kv3 encoding:text:version{e21c7f3c-8a33-41c5-9977-a76d3a32aa0d} format:generic:version{7412167c-06e9-4698-aff2-e63eb59037e7} -->
+{
+ shader = "csgo_complex.vfx"
+ F_SELF_ILLUM = 1
+ F_PAINT_VERTEX_COLORS = 1
+ F_TRANSLUCENT = 1
+ F_BLEND_MODE = 1
+ g_vColorTint = [1.0, 1.0, 1.0, 1.0]
+ g_vSelfIllumTint = [1.0, 1.0, 1.0, 1.0]
+ g_flSelfIllumScale = [4.0, 4.0, 4.0, 4.0]
+ g_flSelfIllumBrightness = [3.0, 3.0, 3.0, 3.0]
+ g_tColor = resource:"materials/dev/primary_white_color_tga_21186c76.vtex"
+ g_tNormal = resource:"materials/default/default_normal_tga_1b833b2a.vtex"
+ g_tSelfIllumMask = resource:"materials/default/default_mask_tga_fde710a5.vtex"
+}
+)CASMAT";
+
+static const char kGlowOccludedVmat[] = R"CASMAT(<!-- kv3 encoding:text:version{e21c7f3c-8a33-41c5-9977-a76d3a32aa0d} format:generic:version{7412167c-06e9-4698-aff2-e63eb59037e7} -->
+{
+ shader = "csgo_complex.vfx"
+ F_SELF_ILLUM = 1
+ F_PAINT_VERTEX_COLORS = 1
+ F_TRANSLUCENT = 1
+ F_BLEND_MODE = 1
+ F_DISABLE_Z_BUFFERING = 1
+ F_DISABLE_Z_PREPASS = 1
+ F_DISABLE_Z_WRITE = 1
+ g_vColorTint = [1.0, 1.0, 1.0, 1.0]
+ g_vSelfIllumTint = [1.0, 1.0, 1.0, 1.0]
+ g_flSelfIllumScale = [4.0, 4.0, 4.0, 4.0]
+ g_flSelfIllumBrightness = [3.0, 3.0, 3.0, 3.0]
+ g_tColor = resource:"materials/dev/primary_white_color_tga_21186c76.vtex"
+ g_tNormal = resource:"materials/default/default_normal_tga_1b833b2a.vtex"
+ g_tSelfIllumMask = resource:"materials/default/default_mask_tga_fde710a5.vtex"
+}
+)CASMAT";
 
 struct MaterialPresetSpec {
     const char* visibleName;
@@ -93,6 +199,7 @@ struct MaterialPresetSpec {
     const char* visibleVmat;
     const char* occludedVmat;
 };
+
 static const MaterialPresetSpec kMaterialPresetSpecs[CHAMS_MATERIAL_COUNT] = {
     { "materials/dev/casplus_flat_visible.vmat", "materials/dev/casplus_flat_occluded.vmat", kFlatVisibleVmat, kFlatOccludedVmat },
     { "materials/dev/casplus_shaded_visible.vmat", "materials/dev/casplus_shaded_occluded.vmat", kShadedVisibleVmat, kShadedOccludedVmat },
@@ -107,6 +214,33 @@ static int ClampChamsMaterialPreset(int preset)
     return preset;
 }
 
+static bool RuntimeMaterialPointerUsable(void* material)
+{
+    if (!material || !IsAccessible(material, sizeof(void*), false))
+        return false;
+    MEMORY_BASIC_INFORMATION mbi{};
+    if (VirtualQuery(material, &mbi, sizeof(mbi)) != sizeof(mbi) ||
+        mbi.State != MEM_COMMIT || (mbi.Protect & (PAGE_NOACCESS | PAGE_GUARD)))
+        return false;
+    void* vtable = *reinterpret_cast<void**>(material);
+    if (!IsAccessible(vtable, sizeof(void*), false))
+        return false;
+    void* firstVirtual = *reinterpret_cast<void**>(vtable);
+    return IsExecutable(firstVirtual);
+}
+
+static bool SelectedVisibleChamsMaterialUsable()
+{
+    return g_materialManager.materialsReady &&
+        RuntimeMaterialPointerUsable(g_materialManager.flatVisible);
+}
+
+static bool SelectedOccludedChamsMaterialUsable()
+{
+    return g_materialManager.materialsReady &&
+        RuntimeMaterialPointerUsable(g_materialManager.flatOccluded);
+}
+
 static void RefreshSelectedChamsMaterials()
 {
     RuntimeMaterialPair& flat = g_materialManager.presets[CHAMS_MATERIAL_FLAT];
@@ -116,15 +250,28 @@ static void RefreshSelectedChamsMaterials()
         g_chamsOccludedMaterialPreset);
     void* visible = g_materialManager.presets[visiblePreset].visible;
     void* occluded = g_materialManager.presets[occludedPreset].occluded;
-    if (!visible && visiblePreset != CHAMS_MATERIAL_FLAT)
+
+    if (!RuntimeMaterialPointerUsable(visible))
     {
-        visible = flat.visible;
-        ++g_materialManager.presetFallbacks;
+        if (visiblePreset != CHAMS_MATERIAL_FLAT &&
+            RuntimeMaterialPointerUsable(flat.visible))
+        {
+            visible = flat.visible;
+            ++g_materialManager.presetFallbacks;
+        }
+        else
+            visible = nullptr;
     }
-    if (!occluded && occludedPreset != CHAMS_MATERIAL_FLAT)
+    if (!RuntimeMaterialPointerUsable(occluded))
     {
-        occluded = flat.occluded;
-        ++g_materialManager.presetFallbacks;
+        if (occludedPreset != CHAMS_MATERIAL_FLAT &&
+            RuntimeMaterialPointerUsable(flat.occluded))
+        {
+            occluded = flat.occluded;
+            ++g_materialManager.presetFallbacks;
+        }
+        else
+            occluded = nullptr;
     }
     g_materialManager.flatVisible = visible;
     g_materialManager.flatOccluded = occluded;
@@ -132,17 +279,20 @@ static void RefreshSelectedChamsMaterials()
 
 static bool ResolveMaterialManagerFunctions()
 {
-    if (g_materialManager.functionsReady) return true;
-    if (g_materialManager.resolveAttempted) return false;
-    g_materialManager.resolveAttempted = true;
+    if (g_materialManager.functionsReady)
+        return true;
+
     HMODULE tier0 = GetModuleHandleW(L"tier0.dll");
     HMODULE materialSystemModule = GetModuleHandleW(L"materialsystem2.dll");
     HMODULE clientModule = GetModuleHandleW(L"client.dll");
+    // Module absence is a transient lifecycle condition and must not consume
+    // the structural one-shot signature attempt.
     if (!tier0 || !materialSystemModule || !clientModule)
-    {
-        ++g_materialManager.resolveFailures;
         return false;
-    }
+    if (g_materialManager.resolveAttempted)
+        return false;
+    g_materialManager.resolveAttempted = true;
+
     static const char kLoadKv3Export[] =
         "?LoadKV3@@YA_NPEAVKeyValues3@@PEAVCUtlString@@PEBDAEBUKV3ID_t@@2I@Z";
     g_materialManager.loadKv3 = reinterpret_cast<LoadKv3Fn>(
@@ -156,16 +306,18 @@ static bool ResolveMaterialManagerFunctions()
         };
         BYTE* p = FindUniquePattern(tier0, kLoadKv3Pattern,
             sizeof(kLoadKv3Pattern)/sizeof(kLoadKv3Pattern[0]));
-        if (p && IsExecutable(p)) g_materialManager.loadKv3 =
-            reinterpret_cast<LoadKv3Fn>(p);
+        if (p && IsExecutable(p))
+            g_materialManager.loadKv3 = reinterpret_cast<LoadKv3Fn>(p);
     }
+
     static const int kSetTypeKv3Pattern[] = {
         0x40,0x53,0x48,0x83,0xEC,-1,0x80,0xFA
     };
     BYTE* setType = FindUniquePattern(clientModule, kSetTypeKv3Pattern,
         sizeof(kSetTypeKv3Pattern)/sizeof(kSetTypeKv3Pattern[0]));
-    if (setType && IsExecutable(setType)) g_materialManager.setTypeKv3 =
-        reinterpret_cast<SetTypeKv3Fn>(setType);
+    if (setType && IsExecutable(setType))
+        g_materialManager.setTypeKv3 = reinterpret_cast<SetTypeKv3Fn>(setType);
+
     static const int kCreateMaterialPattern[] = {
         0x48,0x89,0x5C,0x24,-1,0x48,0x89,0x6C,0x24,-1,
         0x48,0x89,0x74,0x24,-1,0x48,0x89,0x7C,0x24,-1,
@@ -175,16 +327,21 @@ static bool ResolveMaterialManagerFunctions()
     BYTE* create = FindUniquePattern(materialSystemModule,
         kCreateMaterialPattern,
         sizeof(kCreateMaterialPattern)/sizeof(kCreateMaterialPattern[0]));
-    if (create && IsExecutable(create)) g_materialManager.createMaterial =
-        reinterpret_cast<CreateRuntimeMaterialFn>(create);
+    if (create && IsExecutable(create))
+        g_materialManager.createMaterial =
+            reinterpret_cast<CreateRuntimeMaterialFn>(create);
+
     auto createInterface = reinterpret_cast<CreateInterfaceFn>(
         GetProcAddress(materialSystemModule, "CreateInterface"));
-    if (createInterface) g_materialManager.materialSystem =
-        createInterface("VMaterialSystem2_001", nullptr);
+    if (createInterface)
+        g_materialManager.materialSystem =
+            createInterface("VMaterialSystem2_001", nullptr);
+
     g_materialManager.functionsReady = g_materialManager.loadKv3 &&
         g_materialManager.createMaterial && g_materialManager.setTypeKv3 &&
         g_materialManager.materialSystem;
-    if (!g_materialManager.functionsReady) ++g_materialManager.resolveFailures;
+    if (!g_materialManager.functionsReady)
+        ++g_materialManager.resolveFailures;
     return g_materialManager.functionsReady;
 }
 
@@ -192,14 +349,17 @@ static void* CreateRuntimeMaterial(const char* name, const char* vmat,
     BYTE* kv3Storage, SIZE_T storageSize)
 {
     if (!name || !vmat || !kv3Storage || storageSize < 0x200 ||
-        !ResolveMaterialManagerFunctions()) return nullptr;
+        !ResolveMaterialManagerFunctions())
+        return nullptr;
     ZeroMaterialStorage(kv3Storage, storageSize);
     void* kv3 = g_materialManager.setTypeKv3(kv3Storage, 1U, 6U);
-    if (!kv3) return nullptr;
+    if (!kv3)
+        return nullptr;
     const KV3IdView genericId = {
         "generic", 0x41B818518343427Eull, 0xB5F447C23C0CDF8Cull
     };
-    if (!g_materialManager.loadKv3(kv3, nullptr, vmat, &genericId, nullptr, 0U))
+    if (!g_materialManager.loadKv3(kv3, nullptr, vmat,
+        &genericId, nullptr, 0U))
         return nullptr;
     MaterialStrongHandle handle;
     handle.binding = nullptr;
@@ -207,7 +367,8 @@ static void* CreateRuntimeMaterial(const char* name, const char* vmat,
         name, kv3, 0U, 1U);
     if (!handle.binding || !IsAccessible(handle.binding,
         sizeof(MaterialResourceBinding), false) ||
-        !IsAccessible(handle.binding->data, sizeof(void*), false)) return nullptr;
+        !RuntimeMaterialPointerUsable(handle.binding->data))
+        return nullptr;
     return handle.binding->data;
 }
 
@@ -215,23 +376,43 @@ static bool EnsureMaterialManagerReady()
 {
     if (g_materialManager.materialsReady)
     {
+        RuntimeMaterialPair& flat =
+            g_materialManager.presets[CHAMS_MATERIAL_FLAT];
+        g_materialManager.materialsReady =
+            RuntimeMaterialPointerUsable(flat.visible) &&
+            RuntimeMaterialPointerUsable(flat.occluded);
         RefreshSelectedChamsMaterials();
-        return true;
+        if (g_materialManager.materialsReady)
+            return true;
     }
-    if (!ResolveMaterialManagerFunctions()) return false;
+
+    if (!ResolveMaterialManagerFunctions())
+        return false;
+    if (g_materialManager.materialCreationAttempted)
+    {
+        RefreshSelectedChamsMaterials();
+        return false;
+    }
+    g_materialManager.materialCreationAttempted = true;
+
     for (int i = 0; i < CHAMS_MATERIAL_COUNT; ++i)
     {
         const MaterialPresetSpec& spec = kMaterialPresetSpecs[i];
         g_materialManager.presets[i].visible = CreateRuntimeMaterial(
-            spec.visibleName, spec.visibleVmat, g_materialKv3Storage[i * 2], 0x200);
+            spec.visibleName, spec.visibleVmat,
+            g_materialKv3Storage[i * 2], 0x200);
         g_materialManager.presets[i].occluded = CreateRuntimeMaterial(
             spec.occludedName, spec.occludedVmat,
             g_materialKv3Storage[i * 2 + 1], 0x200);
         if (!g_materialManager.presets[i].visible ||
-            !g_materialManager.presets[i].occluded) ++g_materialManager.createFailures;
+            !g_materialManager.presets[i].occluded)
+            ++g_materialManager.createFailures;
     }
+
     RuntimeMaterialPair& flat = g_materialManager.presets[CHAMS_MATERIAL_FLAT];
-    g_materialManager.materialsReady = flat.visible && flat.occluded;
+    g_materialManager.materialsReady =
+        RuntimeMaterialPointerUsable(flat.visible) &&
+        RuntimeMaterialPointerUsable(flat.occluded);
     RefreshSelectedChamsMaterials();
     return g_materialManager.materialsReady;
 }
@@ -245,6 +426,8 @@ static void ResetMaterialManagerState()
     }
     g_materialManager.flatVisible = nullptr;
     g_materialManager.flatOccluded = nullptr;
+    g_materialManager.resolveAttempted = false;
+    g_materialManager.materialCreationAttempted = false;
     g_materialManager.materialsReady = false;
     g_materialManager.functionsReady = false;
     g_materialManager.materialSystem = nullptr;
