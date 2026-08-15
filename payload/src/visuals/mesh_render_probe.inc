@@ -2,8 +2,8 @@
 //
 // Current backend target: CAnimatableSceneObjectDesc::Render in
 // scenesystem.dll. The entry signature and CMeshData layout mirror current
-// public CS2 render implementations (July 2026), but every runtime access stays
-// fail-closed so a game update falls back instead of writing guessed memory.
+// public CS2 render implementations, but every runtime access stays fail-closed
+// so a game update falls back instead of writing guessed memory.
 
 using SceneDrawObjectFn = bool (__fastcall*)(void*, void*, void*, int,
     void*, void*, void*, void*);
@@ -26,6 +26,10 @@ struct MeshRenderBackendState {
     bool installAttempted;
     unsigned int drawCalls;
     unsigned int targetDraws;
+    unsigned int pawnDraws;
+    unsigned int weaponDraws;
+    unsigned int armsDraws;
+    unsigned int worldDraws;
     unsigned int visiblePasses;
     unsigned int occludedPasses;
     unsigned int stateRestores;
@@ -53,8 +57,7 @@ static bool FlushExecutableRange(const void* address, SIZE_T size)
 
 static void WriteAbsoluteIndirectJump(BYTE* destination, const void* target)
 {
-    // jmp qword ptr [rip+0]; dq target
-    // 14 bytes, clobbers no GPR and is therefore suitable for a function entry.
+    // jmp qword ptr [rip+0]; dq target -- clobbers no GPR.
     destination[0] = 0xFF;
     destination[1] = 0x25;
     destination[2] = 0x00;
@@ -74,9 +77,6 @@ static bool ResolveMeshRenderBackend()
     if (!sceneSystem)
         return false;
 
-    // Canonical CAnimatableSceneObjectDesc::Render prologue used by current
-    // CS2 signature sets. The first 14 bytes are five complete instructions:
-    // mov rax,rsp; push rbx; push rdi; push r12; sub rsp,0D0h.
     static const int kDrawObjectPattern[] = {
         0x48, 0x8B, 0xC4, 0x53, 0x57, 0x41, 0x54,
         0x48, 0x81, 0xEC, 0xD0, 0x00, 0x00, 0x00, 0x49, 0x63
@@ -99,10 +99,12 @@ static bool ResolveMeshRenderBackend()
     return true;
 }
 
-static unsigned int EnemyOwnerHandleFromSceneObject(void* sceneObject)
+static bool VisualOwnerFromSceneObject(void* sceneObject,
+    unsigned int* ownerHandle, VisualTargetKind* targetKind)
 {
-    if (!sceneObject || !IsAccessible(sceneObject, 0xF4, false))
-        return 0xFFFFFFFFu;
+    if (!sceneObject || !ownerHandle || !targetKind ||
+        !IsAccessible(sceneObject, 0xF4, false))
+        return false;
 
     static const unsigned int kOwnerOffsets[] = {
         0x98, 0xA0, 0xA8, 0xB0, 0xB8, 0xC0,
@@ -115,17 +117,21 @@ static unsigned int EnemyOwnerHandleFromSceneObject(void* sceneObject)
         auto* handle = reinterpret_cast<unsigned int*>(base + kOwnerOffsets[i]);
         if (!IsAccessible(handle, sizeof(unsigned int), false))
             continue;
-        if (IsEnemyVisualTarget(*handle))
-            return *handle;
+        const VisualTargetKind kind = VisualTargetKindFor(*handle);
+        if (kind == VISUAL_TARGET_NONE || !VisualTargetKindEnabled(kind))
+            continue;
+        *ownerHandle = *handle;
+        *targetKind = kind;
+        return true;
     }
-    return 0xFFFFFFFFu;
+    return false;
 }
 
-static bool MeshBatchBelongsToEnemy(void* meshDraw, int dataCount,
-    unsigned int* ownerHandle)
+static bool MeshBatchBelongsToVisualTarget(void* meshDraw, int dataCount,
+    unsigned int* ownerHandle, VisualTargetKind* targetKind)
 {
     if (!meshDraw || dataCount <= 0 || dataCount > kMaxMeshBatch ||
-        !ownerHandle)
+        !ownerHandle || !targetKind)
         return false;
     BYTE* first = reinterpret_cast<BYTE*>(meshDraw);
     if (!IsAccessible(first, kMeshDataStride, false))
@@ -133,11 +139,19 @@ static bool MeshBatchBelongsToEnemy(void* meshDraw, int dataCount,
     auto** sceneSlot = reinterpret_cast<void**>(first + kMeshSceneObjectOffset);
     if (!IsAccessible(sceneSlot, sizeof(void*), false) || !*sceneSlot)
         return false;
-    const unsigned int handle = EnemyOwnerHandleFromSceneObject(*sceneSlot);
-    if (handle == 0xFFFFFFFFu)
-        return false;
-    *ownerHandle = handle;
-    return true;
+    return VisualOwnerFromSceneObject(*sceneSlot, ownerHandle, targetKind);
+}
+
+static void CountTargetDraw(VisualTargetKind kind)
+{
+    if (IsPlayerPawnTargetKind(kind))
+        ++g_meshRenderBackend.pawnDraws;
+    else if (IsPlayerWeaponTargetKind(kind))
+        ++g_meshRenderBackend.weaponDraws;
+    else if (kind == VISUAL_TARGET_LOCAL_ARMS)
+        ++g_meshRenderBackend.armsDraws;
+    else
+        ++g_meshRenderBackend.worldDraws;
 }
 
 struct SavedMeshState {
@@ -277,16 +291,18 @@ static bool __fastcall MeshDrawObjectHook(void* a1, void* a2, void* meshDraw,
     ++g_meshRenderBackend.drawCalls;
     if (!meshDraw || dataCount <= 0 || dataCount > kMaxMeshBatch ||
         !g_espConfig.enable || !g_espConfig.chams ||
-        !g_espConfig.chamsEnemies || g_espConfig.chamsStyle == 3)
+        g_espConfig.chamsStyle == 3)
         return original(a1, a2, meshDraw, dataCount, a5, a6, a7, a8);
 
     unsigned int ownerHandle = 0xFFFFFFFFu;
-    if (!MeshBatchBelongsToEnemy(meshDraw, dataCount, &ownerHandle))
+    VisualTargetKind targetKind = VISUAL_TARGET_NONE;
+    if (!MeshBatchBelongsToVisualTarget(meshDraw, dataCount, &ownerHandle,
+        &targetKind))
         return original(a1, a2, meshDraw, dataCount, a5, a6, a7, a8);
 
     ++g_meshRenderBackend.targetDraws;
-    // The guard's SavedMeshState array is intentionally not aggregate-zeroed;
-    // Capture() fully initializes every entry that can be read by Restore().
+    CountTargetDraw(targetKind);
+
     MeshRenderStateGuard stateGuard;
     stateGuard.captured = false;
     stateGuard.dirty = false;
@@ -298,8 +314,9 @@ static bool __fastcall MeshDrawObjectHook(void* a1, void* a2, void* meshDraw,
 
     const bool wantVisible = g_espConfig.chamsStyle == 0 ||
         g_espConfig.chamsStyle == 1;
-    const bool wantOccluded = g_espConfig.chamsStyle == 0 ||
-        g_espConfig.chamsStyle == 2;
+    const bool wantOccluded = (g_espConfig.chamsStyle == 0 ||
+        g_espConfig.chamsStyle == 2) &&
+        VisualTargetAllowsOccludedPass(targetKind);
 
     const bool materialsReady = g_materialManager.materialsReady &&
         g_materialManager.flatVisible && g_materialManager.flatOccluded &&
@@ -376,8 +393,6 @@ static bool InstallMeshRenderBackend()
     if (!trampolineFlushed)
         return false;
 
-    // Spell out the first byte address; MSVC does not permit a direct
-    // reinterpret_cast from an array type to a function pointer.
     g_meshRenderBackend.originalDrawObject = reinterpret_cast<SceneDrawObjectFn>(
         reinterpret_cast<void*>(&g_drawObjectTrampoline[0]));
 
