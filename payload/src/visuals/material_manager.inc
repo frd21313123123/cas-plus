@@ -43,6 +43,10 @@ struct MaterialManagerState {
     CreateRuntimeMaterialFn createMaterial;
     SetTypeKv3Fn setTypeKv3;
     RuntimeMaterialPair presets[CHAMS_MATERIAL_COUNT];
+    // Compatibility aliases kept while the mesh backend migrates to selectable
+    // presets. They always point at the mandatory Flat pair.
+    void* flatVisible;
+    void* flatOccluded;
     bool resolveAttempted;
     bool functionsReady;
     bool materialsReady;
@@ -216,9 +220,12 @@ static bool EnsureMaterialManagerReady()
             ++g_materialManager.createFailures;
     }
 
-    g_materialManager.materialsReady =
-        g_materialManager.presets[CHAMS_MATERIAL_FLAT].visible &&
+    g_materialManager.flatVisible =
+        g_materialManager.presets[CHAMS_MATERIAL_FLAT].visible;
+    g_materialManager.flatOccluded =
         g_materialManager.presets[CHAMS_MATERIAL_FLAT].occluded;
+    g_materialManager.materialsReady =
+        g_materialManager.flatVisible && g_materialManager.flatOccluded;
     return g_materialManager.materialsReady;
 }
 
@@ -241,9 +248,8 @@ static void* ChamsMaterialForPass(int preset, bool occluded)
     if (material)
         return material;
     ++g_materialManager.presetFallbacks;
-    RuntimeMaterialPair& flat =
-        g_materialManager.presets[CHAMS_MATERIAL_FLAT];
-    return occluded ? flat.occluded : flat.visible;
+    return occluded ? g_materialManager.flatOccluded :
+        g_materialManager.flatVisible;
 }
 
 static void ResetMaterialManagerState()
@@ -253,6 +259,8 @@ static void ResetMaterialManagerState()
         g_materialManager.presets[i].visible = nullptr;
         g_materialManager.presets[i].occluded = nullptr;
     }
+    g_materialManager.flatVisible = nullptr;
+    g_materialManager.flatOccluded = nullptr;
     g_materialManager.materialsReady = false;
     g_materialManager.functionsReady = false;
     g_materialManager.materialSystem = nullptr;
