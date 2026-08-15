@@ -56,7 +56,7 @@
       <DataExecutionPrevention>true</DataExecutionPrevention>
     </Link>
     <PreBuildEvent>
-      <Command>powershell -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)tools\apply-feature-foundation.ps1" -InputPath "$(ProjectDir)src\dllmain.cpp" -OutputPath "$(ProjectDir)$(IntDir)dllmain.foundation.cpp"&#xD;&#xA;powershell -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)tools\apply-chams-render-pipeline.ps1" -InputPath "$(ProjectDir)$(IntDir)dllmain.foundation.cpp" -OutputPath "$(ProjectDir)$(IntDir)dllmain.chams.cpp"</Command>
+      <Command>powershell -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)tools\apply-feature-foundation.ps1" -InputPath "$(ProjectDir)src\dllmain.cpp" -OutputPath "$(ProjectDir)$(IntDir)dllmain.foundation.cpp"&#xD;&#xA;powershell -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)tools\apply-feature-runtime-sync.ps1" -InputPath "$(ProjectDir)$(IntDir)dllmain.foundation.cpp" -OutputPath "$(ProjectDir)$(IntDir)dllmain.foundation.synced.cpp"&#xD;&#xA;powershell -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)tools\apply-chams-render-pipeline.ps1" -InputPath "$(ProjectDir)$(IntDir)dllmain.foundation.synced.cpp" -OutputPath "$(ProjectDir)$(IntDir)dllmain.chams.cpp"</Command>
     </PreBuildEvent>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
@@ -84,7 +84,7 @@
       <DataExecutionPrevention>true</DataExecutionPrevention>
     </Link>
     <PreBuildEvent>
-      <Command>powershell -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)tools\apply-feature-foundation.ps1" -InputPath "$(ProjectDir)src\dllmain.cpp" -OutputPath "$(ProjectDir)$(IntDir)dllmain.foundation.cpp"&#xD;&#xA;powershell -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)tools\apply-chams-render-pipeline.ps1" -InputPath "$(ProjectDir)$(IntDir)dllmain.foundation.cpp" -OutputPath "$(ProjectDir)$(IntDir)dllmain.chams.cpp"</Command>
+      <Command>powershell -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)tools\apply-feature-foundation.ps1" -InputPath "$(ProjectDir)src\dllmain.cpp" -OutputPath "$(ProjectDir)$(IntDir)dllmain.foundation.cpp"&#xD;&#xA;powershell -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)tools\apply-feature-runtime-sync.ps1" -InputPath "$(ProjectDir)$(IntDir)dllmain.foundation.cpp" -OutputPath "$(ProjectDir)$(IntDir)dllmain.foundation.synced.cpp"&#xD;&#xA;powershell -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)tools\apply-chams-render-pipeline.ps1" -InputPath "$(ProjectDir)$(IntDir)dllmain.foundation.synced.cpp" -OutputPath "$(ProjectDir)$(IntDir)dllmain.chams.cpp"</Command>
     </PreBuildEvent>
   </ItemDefinitionGroup>
   <ItemGroup>
