@@ -191,6 +191,21 @@ static void ApplyMeshBatchMaterial(void* meshDraw, int dataCount,
     }
 }
 
+static void ApplyMeshBatchColor(void* meshDraw, int dataCount,
+    const RGBVal& colorValue)
+{
+    BYTE* base = reinterpret_cast<BYTE*>(meshDraw);
+    for (int i = 0; i < dataCount; ++i)
+    {
+        BYTE* color = base + static_cast<SIZE_T>(i) *
+            kMeshDataStride + kMeshColorOffset;
+        color[0] = colorValue.r;
+        color[1] = colorValue.g;
+        color[2] = colorValue.b;
+        color[3] = 255;
+    }
+}
+
 static void RestoreMeshBatch(void* meshDraw, int dataCount,
     const SavedMeshState* saved)
 {
@@ -213,6 +228,45 @@ static void RestoreMeshBatch(void* meshDraw, int dataCount,
     ++g_meshRenderBackend.stateRestores;
 }
 
+struct MeshRenderStateGuard {
+    void* meshDraw;
+    int dataCount;
+    bool captured;
+    bool dirty;
+    SavedMeshState saved[kMaxMeshBatch];
+
+    bool Capture(void* draw, int count)
+    {
+        meshDraw = draw;
+        dataCount = count;
+        dirty = false;
+        captured = CaptureMeshBatch(draw, count, saved);
+        return captured;
+    }
+
+    void ApplyMaterial(void* materialValue, const RGBVal& colorValue)
+    {
+        if (!captured)
+            return;
+        ApplyMeshBatchMaterial(meshDraw, dataCount, materialValue, colorValue);
+        dirty = true;
+    }
+
+    void ApplyColor(const RGBVal& colorValue)
+    {
+        if (!captured)
+            return;
+        ApplyMeshBatchColor(meshDraw, dataCount, colorValue);
+        dirty = true;
+    }
+
+    ~MeshRenderStateGuard()
+    {
+        if (captured && dirty)
+            RestoreMeshBatch(meshDraw, dataCount, saved);
+    }
+};
+
 static bool __fastcall MeshDrawObjectHook(void* a1, void* a2, void* meshDraw,
     int dataCount, void* a5, void* a6, void* a7, void* a8)
 {
@@ -231,11 +285,12 @@ static bool __fastcall MeshDrawObjectHook(void* a1, void* a2, void* meshDraw,
         return original(a1, a2, meshDraw, dataCount, a5, a6, a7, a8);
 
     ++g_meshRenderBackend.targetDraws;
-    // CaptureMeshBatch fully initializes every element that can be read below.
-    // Avoid aggregate zero-initialization here: MSVC lowers the 2 KB clear to
-    // an external memset call, which violates the payload's /NODEFAULTLIB build.
-    SavedMeshState saved[kMaxMeshBatch];
-    if (!CaptureMeshBatch(meshDraw, dataCount, saved))
+    // The guard's SavedMeshState array is intentionally not aggregate-zeroed;
+    // Capture() fully initializes every entry that can be read by Restore().
+    MeshRenderStateGuard stateGuard;
+    stateGuard.captured = false;
+    stateGuard.dirty = false;
+    if (!stateGuard.Capture(meshDraw, dataCount))
     {
         ++g_meshRenderBackend.layoutRejects;
         return original(a1, a2, meshDraw, dataCount, a5, a6, a7, a8);
@@ -256,23 +311,9 @@ static bool __fastcall MeshDrawObjectHook(void* a1, void* a2, void* meshDraw,
         ++g_meshRenderBackend.materialFallbacks;
         if (wantVisible)
         {
-            BYTE* base = reinterpret_cast<BYTE*>(meshDraw);
-            for (int i = 0; i < dataCount; ++i)
-            {
-                BYTE* color = base + static_cast<SIZE_T>(i) *
-                    kMeshDataStride + kMeshColorOffset;
-                color[0] = g_espConfig.chamsColorVisible.r;
-                color[1] = g_espConfig.chamsColorVisible.g;
-                color[2] = g_espConfig.chamsColorVisible.b;
-                color[3] = 255;
-            }
+            stateGuard.ApplyColor(g_espConfig.chamsColorVisible);
             ++g_meshRenderBackend.visiblePasses;
-            const bool result = original(a1, a2, meshDraw, dataCount,
-                a5, a6, a7, a8);
-            RestoreMeshBatch(meshDraw, dataCount, saved);
-            return result;
         }
-        RestoreMeshBatch(meshDraw, dataCount, saved);
         return original(a1, a2, meshDraw, dataCount, a5, a6, a7, a8);
     }
 
@@ -280,8 +321,8 @@ static bool __fastcall MeshDrawObjectHook(void* a1, void* a2, void* meshDraw,
     bool drew = false;
     if (wantOccluded)
     {
-        ApplyMeshBatchMaterial(meshDraw, dataCount,
-            g_materialManager.flatOccluded, g_espConfig.chamsColorOccluded);
+        stateGuard.ApplyMaterial(g_materialManager.flatOccluded,
+            g_espConfig.chamsColorOccluded);
         ++g_meshRenderBackend.occludedPasses;
         result = original(a1, a2, meshDraw, dataCount, a5, a6, a7, a8);
         drew = true;
@@ -289,14 +330,13 @@ static bool __fastcall MeshDrawObjectHook(void* a1, void* a2, void* meshDraw,
 
     if (wantVisible)
     {
-        ApplyMeshBatchMaterial(meshDraw, dataCount,
-            g_materialManager.flatVisible, g_espConfig.chamsColorVisible);
+        stateGuard.ApplyMaterial(g_materialManager.flatVisible,
+            g_espConfig.chamsColorVisible);
         ++g_meshRenderBackend.visiblePasses;
         result = original(a1, a2, meshDraw, dataCount, a5, a6, a7, a8);
         drew = true;
     }
 
-    RestoreMeshBatch(meshDraw, dataCount, saved);
     if (!drew)
         return original(a1, a2, meshDraw, dataCount, a5, a6, a7, a8);
     return result;
