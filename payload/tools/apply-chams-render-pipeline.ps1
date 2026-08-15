@@ -12,14 +12,16 @@ $source = Get-Content -LiteralPath $InputPath -Raw -Encoding UTF8
 $sourceDirectory = Split-Path -Parent $InputPath
 $pipelinePath = Join-Path $sourceDirectory 'visuals\chams_render_pipeline.inc'
 $targetRegistryPath = Join-Path $sourceDirectory 'visuals\visual_target_registry.inc'
+$materialManagerPath = Join-Path $sourceDirectory 'visuals\material_manager.inc'
 $meshBackendPath = Join-Path $sourceDirectory 'visuals\mesh_render_probe.inc'
-foreach ($requiredPath in @($pipelinePath, $targetRegistryPath, $meshBackendPath)) {
+foreach ($requiredPath in @($pipelinePath, $targetRegistryPath, $materialManagerPath, $meshBackendPath)) {
     if (-not (Test-Path -LiteralPath $requiredPath)) {
         throw "Visual renderer module was not found: $requiredPath"
     }
 }
 $newPipeline = Get-Content -LiteralPath $pipelinePath -Raw -Encoding UTF8
 $targetRegistry = Get-Content -LiteralPath $targetRegistryPath -Raw -Encoding UTF8
+$materialManager = Get-Content -LiteralPath $materialManagerPath -Raw -Encoding UTF8
 $meshBackend = Get-Content -LiteralPath $meshBackendPath -Raw -Encoding UTF8
 
 $oldConfig = @'
@@ -31,12 +33,9 @@ $oldConfig = @'
 
 $newConfig = @'
     bool chams = true;
-    // The mesh renderer owns the normal depth-tested player pass whenever its
-    // guarded DrawObject trampoline is installed. Frame-stage tint remains the
-    // compatibility fallback when the scene-system entry cannot be resolved.
+    // The scene-system renderer owns enemy mesh passes whenever its guarded
+    // DrawObject trampoline and runtime MaterialManager are available.
     RGBVal chamsColorVisible = { 132, 204, 22 };
-    // Occluded rendering remains the screen-highlight compatibility backend
-    // until the MaterialManager can supply an Ignore-Z material pair.
     RGBVal chamsColorOccluded = { 239, 68, 68 };
     // 0: Visible + Occluded, 1: Visible Only, 2: Occluded Only,
     // 3: legacy Glow Only compatibility mode.
@@ -55,12 +54,14 @@ $end = $source.IndexOf($endAnchor)
 if ($start -lt 0 -or $end -le $start) {
     throw 'ApplyModelPasses anchors were not found. The payload source changed; refusing to patch blindly.'
 }
-$generatedVisualBackend = $targetRegistry + "`r`n" + $meshBackend + "`r`n" +
-    $newPipeline + "`r`n"
+$generatedVisualBackend = $targetRegistry + "`r`n" + $materialManager + "`r`n" +
+    $meshBackend + "`r`n" + $newPipeline + "`r`n"
 $source = $source.Substring(0, $start) + $generatedVisualBackend + $source.Substring($end)
 
-# Keep target selection in FrameStageNotify. DrawObject consumes only the
-# published full entity handles and performs no controller/schema scan itself.
+# Keep target selection in FrameStageNotify. DrawObject consumes only published
+# entity handles. Material creation is also dispatched here so KeyValues3 /
+# MaterialSystem2 calls happen on the CS2 render/game lifecycle rather than the
+# manual-map worker thread.
 $updateStartAnchor = @'
 static int UpdateBotHighlights(BotHighlightStats* stats)
 {
@@ -69,6 +70,7 @@ static int UpdateBotHighlights(BotHighlightStats* stats)
 $updateStartReplacement = @'
 static int UpdateBotHighlights(BotHighlightStats* stats)
 {
+    EnsureMaterialManagerReady();
     ResetVisualTargets();
     BeginVisualTargetUpdate();
     if (stats)
@@ -114,8 +116,7 @@ if (-not $source.Contains($publishAnchor)) {
 }
 $source = $source.Replace($publishAnchor, $publishReplacement)
 
-# Do not invent a team when the local controller is not ready. A forced CT
-# fallback could classify teammates as enemies during connect/map transitions.
+# Do not invent a team when the local controller is not ready.
 $oldTeamFallback = @'
     if (localTeam < 2 || localTeam > 3)
     {
@@ -159,9 +160,8 @@ if (-not $source.Contains($oldBotBookkeeping)) {
 }
 $source = $source.Replace($oldBotBookkeeping, '')
 
-# Install the mesh backend only after the existing frame-stage/schema runtime is
-# ready. Failure is non-fatal: frame-stage tint + screen highlight remain the
-# compatibility path.
+# Hooking DrawObject is non-fatal. If a current CS2 build fails the unique
+# signature/prologue checks, FrameStage tint + CGlowProperty stay as fallback.
 $startupAnchor = @'
     if (!InstallFrameStageBridge())
     {
@@ -191,8 +191,8 @@ if (-not $source.Contains($startupAnchor)) {
 }
 $source = $source.Replace($startupAnchor, $startupReplacement)
 
-# Restore every state owner in reverse order: model/glow bytes, DrawObject
-# detour, target registry, then the frame-stage vtable bridge.
+# Restore every state owner in reverse order: entity state, scene detour,
+# MaterialManager references, target registry, then frame-stage vtable bridge.
 $shutdownAnchor = @'
     RemoveFrameStageBridge();
     return 0;
@@ -201,6 +201,7 @@ $shutdownReplacement = @'
     if (g_botHighlightRuntimeReady && g_originalBotHighlightCount > 0)
         RestoreAllBotHighlights(nullptr);
     RemoveMeshRenderBackend();
+    ResetMaterialManagerState();
     ResetVisualTargets();
     g_meshRenderBackend.drawObjectTarget = nullptr;
     g_meshRenderBackend.resolved = false;
@@ -218,7 +219,7 @@ $source = $source.Replace(
 
 $source = $source.Replace(
     'L"Chams: model + through-wall passes active"',
-    'L"Chams: mesh-visible + occluded compatibility backend"')
+    'L"Chams: scene mesh backend + compatibility fallback"')
 
 $outputDirectory = Split-Path -Parent $OutputPath
 if ($outputDirectory) {
