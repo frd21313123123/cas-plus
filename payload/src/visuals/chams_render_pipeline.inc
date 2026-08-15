@@ -176,8 +176,11 @@ static bool ApplyModelPasses(const BotHighlightRuntime& runtime,
     }
 
     BYTE* glowBase = reinterpret_cast<BYTE*>(modelEntity) + runtime.glowOffset;
+    // Do not suppress the compatibility wall pass merely because materials were
+    // once created. Ownership transfers only while the currently selected
+    // Ignore-Z material is still a committed object with a valid vtable.
     const bool materialOwnsOccludedPass = plan.occludedHighlight &&
-        g_meshRenderBackend.installed && g_materialManager.materialsReady &&
+        g_meshRenderBackend.installed && SelectedOccludedChamsMaterialUsable() &&
         meshTarget && VisualTargetAllowsOccludedPass(targetKind);
 
     if (materialOwnsOccludedPass)
