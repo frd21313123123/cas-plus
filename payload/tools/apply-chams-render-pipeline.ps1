@@ -63,6 +63,8 @@ $generatedVisualBackend = $noCrtMemory + "`r`n" + $targetRegistry + "`r`n" +
     $diagnostics + "`r`n" + $newPipeline + "`r`n"
 $source = $source.Substring(0, $start) + $generatedVisualBackend + $source.Substring($end)
 
+# Resolve/install the scene hook only from the frame-stage game lifecycle. The
+# manual-map worker owns UI/bootstrap only and never patches scenesystem.dll.
 $updateStartAnchor = @'
 static int UpdateBotHighlights(BotHighlightStats* stats)
 {
@@ -71,6 +73,7 @@ static int UpdateBotHighlights(BotHighlightStats* stats)
 $updateStartReplacement = @'
 static int UpdateBotHighlights(BotHighlightStats* stats)
 {
+    InstallMeshRenderBackend();
     EnsureMaterialManagerReady();
     BeginVisualTargetUpdate();
     if (stats)
@@ -248,7 +251,6 @@ $materialClickReplacement = @'
 if (-not $source.Contains($materialClickAnchor)) { throw 'Chams material UI click anchor was not found. Refusing to patch blindly.' }
 $source = $source.Replace($materialClickAnchor, $materialClickReplacement)
 
-# Append backend state to the existing compact visual status text.
 $statusAnchor = @'
     SetBotStatus(status.text);
 }
@@ -281,7 +283,6 @@ $startupReplacement = @'
     }
     else
     {
-        InstallMeshRenderBackend();
         const bool modelEffects = g_espConfig.enable &&
             (g_espConfig.chams || g_espConfig.glow);
         g_botHighlightEnabled = modelEffects;
