@@ -43,6 +43,14 @@ static MaterialManagerState g_materialManager{};
 alignas(16) static BYTE g_visibleKv3Storage[0x200]{};
 alignas(16) static BYTE g_occludedKv3Storage[0x200]{};
 
+static void ZeroMaterialStorage(BYTE* destination, SIZE_T size)
+{
+    // Volatile writes prevent /O2 from folding this no-CRT helper into memset.
+    volatile BYTE* cursor = destination;
+    for (SIZE_T i = 0; i < size; ++i)
+        cursor[i] = 0;
+}
+
 static const char kFlatVisibleVmat[] =
 "<!-- kv3 encoding:text:version{e21c7f3c-8a33-41c5-9977-a76d3a32aa0d} format:generic:version{7412167c-06e9-4698-aff2-e63eb59037e7} -->\n"
 "{\n"
@@ -107,8 +115,6 @@ static bool ResolveMaterialManagerFunctions()
             g_materialManager.loadKv3 = reinterpret_cast<LoadKv3Fn>(loadKv3);
     }
 
-    // Canonical July 2026 SetTypeKV3 prologue. Keep FindUniquePattern here:
-    // this intentionally refuses to guess if a future build makes it ambiguous.
     static const int kSetTypeKv3Pattern[] = {
         0x40, 0x53, 0x48, 0x83, 0xEC, -1, 0x80, 0xFA
     };
@@ -154,7 +160,7 @@ static void* CreateRuntimeMaterial(const char* name, const char* vmat,
         !ResolveMaterialManagerFunctions())
         return nullptr;
 
-    ZeroBytes(kv3Storage, storageSize);
+    ZeroMaterialStorage(kv3Storage, storageSize);
     void* kv3 = g_materialManager.setTypeKv3(kv3Storage, 1U, 6U);
     if (!kv3)
         return nullptr;
@@ -166,7 +172,8 @@ static void* CreateRuntimeMaterial(const char* name, const char* vmat,
         nullptr, 0U))
         return nullptr;
 
-    MaterialStrongHandle handle{};
+    MaterialStrongHandle handle;
+    handle.binding = nullptr;
     g_materialManager.createMaterial(g_materialManager.materialSystem, &handle,
         name, kv3, 0U, 1U);
     if (!handle.binding || !IsAccessible(handle.binding,
