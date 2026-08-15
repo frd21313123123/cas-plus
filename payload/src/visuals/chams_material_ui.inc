@@ -63,8 +63,9 @@ static bool HandleChamsMaterialPresetClick(int mouseX, int mouseY)
 }
 
 // The payload intentionally links /NODEFAULTLIB. MSVC may lower aggregate
-// zero-initialization in the following mesh module to memset, so provide the
-// tiny implementation locally instead of introducing the CRT.
+// zero-initialization in the following mesh module to memset, so force a real
+// function call and provide the tiny implementation locally instead of CRT.
+#pragma function(memset)
 extern "C" void* memset(void* destination, int value, SIZE_T count)
 {
     volatile BYTE* cursor = reinterpret_cast<volatile BYTE*>(destination);
