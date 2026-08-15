@@ -2,8 +2,8 @@
 //
 // Current backend target: CAnimatableSceneObjectDesc::Render in
 // scenesystem.dll. Runtime writes are guarded by one confirmed scene-object
-// owner layout, per-element batch classification and a suspended-thread patch
-// barrier. Any layout/signature mismatch falls back to the original renderer.
+// owner layout, per-element batch verification and a suspended-thread patch
+// barrier. Any ambiguity renders the original batch unchanged.
 
 using SceneDrawObjectFn = bool (__fastcall*)(void*, void*, void*, int,
     void*, void*, void*, void*);
@@ -21,8 +21,8 @@ static constexpr unsigned int kMeshSceneObjectOffset = 0x18;
 static constexpr unsigned int kMeshMaterialOffset = 0x20;
 static constexpr unsigned int kMeshMaterial2Offset = 0x28;
 static constexpr unsigned int kMeshColorOffset = 0x50;
-// Confirmed by independent current CS2 scene/material implementations. Do not
-// scan neighboring fields: a changed layout disables classification instead.
+// Confirmed by independent CS2 scene/material implementations. No neighboring
+// offset scan is permitted: if this layout changes, classification fails closed.
 static constexpr unsigned int kSceneObjectOwnerHandleOffset = 0xB8;
 static constexpr int kMaxMeshBatch = 128;
 static constexpr unsigned int kDrawPatchSize = 14;
@@ -82,6 +82,34 @@ static volatile LONG g_meshHookBypass = 0;
 
 #pragma section(".cpxtrm", read, execute)
 __declspec(allocate(".cpxtrm")) static BYTE g_drawObjectTrampoline[64] = { 0xCC };
+
+static bool ReadableCommittedRange(const void* address, SIZE_T bytes)
+{
+    if (!address || bytes == 0)
+        return false;
+    MEMORY_BASIC_INFORMATION mbi;
+    if (VirtualQuery(address, &mbi, sizeof(mbi)) != sizeof(mbi) ||
+        mbi.State != MEM_COMMIT || (mbi.Protect & (PAGE_NOACCESS | PAGE_GUARD)))
+        return false;
+    const ULONG_PTR start = reinterpret_cast<ULONG_PTR>(address);
+    const ULONG_PTR region = reinterpret_cast<ULONG_PTR>(mbi.BaseAddress);
+    if (start < region)
+        return false;
+    const SIZE_T offset = static_cast<SIZE_T>(start - region);
+    return offset <= mbi.RegionSize && bytes <= mbi.RegionSize - offset;
+}
+
+static bool WritableCommittedRange(void* address, SIZE_T bytes)
+{
+    if (!ReadableCommittedRange(address, bytes))
+        return false;
+    MEMORY_BASIC_INFORMATION mbi;
+    if (VirtualQuery(address, &mbi, sizeof(mbi)) != sizeof(mbi))
+        return false;
+    const DWORD writable = PAGE_READWRITE | PAGE_WRITECOPY |
+        PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY;
+    return (mbi.Protect & writable) != 0;
+}
 
 static bool ResolvePatchKernelApi()
 {
@@ -158,12 +186,11 @@ static void ResumePatchThreads(SuspendedThreadSet* threads)
         return;
     for (int i = threads->count - 1; i >= 0; --i)
     {
-        if (threads->handles[i])
-        {
-            g_patchKernelApi.resumeThread(threads->handles[i]);
-            CloseHandle(threads->handles[i]);
-            threads->handles[i] = nullptr;
-        }
+        HANDLE thread = threads->handles[i];
+        if (!thread)
+            continue;
+        g_patchKernelApi.resumeThread(thread);
+        CloseHandle(thread);
     }
     threads->count = 0;
 }
@@ -176,9 +203,8 @@ static bool SuspendOtherProcessThreads(SuspendedThreadSet* threads)
     const DWORD processId = GetCurrentProcessId();
     const DWORD currentThreadId = g_patchKernelApi.getCurrentThreadId();
 
-    // Repeat enumeration until one complete pass discovers no new threads.
-    // This closes the ordinary snapshot race without keeping threads suspended
-    // longer than the tiny VirtualProtect/write/flush patch window.
+    // Repeat enumeration until a complete pass discovers no new process
+    // threads. Patching starts only after that stable snapshot is suspended.
     for (int pass = 0; pass < 4; ++pass)
     {
         HANDLE snapshot = g_patchKernelApi.createToolhelp32Snapshot(
@@ -190,10 +216,16 @@ static bool SuspendOtherProcessThreads(SuspendedThreadSet* threads)
             return false;
         }
 
-        ThreadEntry32Local entry{};
+        ThreadEntry32Local entry;
         entry.dwSize = sizeof(entry);
-        bool foundNewThread = false;
         BOOL hasEntry = g_patchKernelApi.thread32First(snapshot, &entry);
+        if (!hasEntry)
+        {
+            CloseHandle(snapshot);
+            ResumePatchThreads(threads);
+            return false;
+        }
+        bool foundNewThread = false;
         while (hasEntry)
         {
             if (entry.th32OwnerProcessID == processId &&
@@ -208,15 +240,11 @@ static bool SuspendOtherProcessThreads(SuspendedThreadSet* threads)
                 }
                 HANDLE thread = g_patchKernelApi.openThread(
                     kThreadSuspendResume, 0, entry.th32ThreadID);
-                if (!thread)
+                if (!thread ||
+                    g_patchKernelApi.suspendThread(thread) == kSuspendFailed)
                 {
-                    CloseHandle(snapshot);
-                    ResumePatchThreads(threads);
-                    return false;
-                }
-                if (g_patchKernelApi.suspendThread(thread) == kSuspendFailed)
-                {
-                    CloseHandle(thread);
+                    if (thread)
+                        CloseHandle(thread);
                     CloseHandle(snapshot);
                     ResumePatchThreads(threads);
                     return false;
@@ -255,7 +283,8 @@ static bool PatchExecutableBytesSafely(BYTE* target, const BYTE* expected,
         !IsExecutable(target) || !ResolvePatchKernelApi())
         return false;
 
-    SuspendedThreadSet threads{};
+    SuspendedThreadSet threads;
+    threads.count = 0;
     if (!SuspendOtherProcessThreads(&threads))
         return false;
 
@@ -273,6 +302,7 @@ static bool PatchExecutableBytesSafely(BYTE* target, const BYTE* expected,
         const bool protectionRestored =
             VirtualProtect(target, count, oldProtection, &ignored) != 0;
         success = flushed && protectionRestored;
+
         if (!success)
         {
             DWORD rollbackProtection = 0;
@@ -284,7 +314,7 @@ static bool PatchExecutableBytesSafely(BYTE* target, const BYTE* expected,
                 g_patchKernelApi.flushInstructionCache(
                     reinterpret_cast<HANDLE>(static_cast<LONG_PTR>(-1)),
                     target, count);
-                VirtualProtect(target, count, rollbackProtection, &ignored);
+                VirtualProtect(target, count, oldProtection, &ignored);
             }
         }
     }
@@ -329,12 +359,14 @@ static bool VisualOwnerFromSceneObject(void* sceneObject,
     unsigned int* ownerHandle, VisualTargetKind* targetKind)
 {
     if (!sceneObject || !snapshot || snapshotCount <= 0 || !ownerHandle ||
-        !targetKind || !IsAccessible(sceneObject,
-            kSceneObjectOwnerHandleOffset + sizeof(unsigned int), false))
+        !targetKind)
+        return false;
+    BYTE* ownerSlot = reinterpret_cast<BYTE*>(sceneObject) +
+        kSceneObjectOwnerHandleOffset;
+    if (!ReadableCommittedRange(ownerSlot, sizeof(unsigned int)))
         return false;
 
-    const unsigned int handle = *reinterpret_cast<unsigned int*>(
-        reinterpret_cast<BYTE*>(sceneObject) + kSceneObjectOwnerHandleOffset);
+    const unsigned int handle = *reinterpret_cast<unsigned int*>(ownerSlot);
     const VisualTargetKind kind = VisualTargetKindFromSnapshot(handle,
         snapshot, snapshotCount);
     if (kind == VISUAL_TARGET_NONE || !VisualTargetKindEnabled(kind))
@@ -351,29 +383,58 @@ struct MeshElementClassification {
 
 static bool ClassifyMeshBatch(void* meshDraw, int dataCount,
     const VisualTargetEntry* snapshot, int snapshotCount,
-    MeshElementClassification* classifications, bool* anyTarget)
+    MeshElementClassification* classifications)
 {
     if (!meshDraw || dataCount <= 0 || dataCount > kMaxMeshBatch ||
-        !snapshot || snapshotCount < 0 || !classifications || !anyTarget)
+        !snapshot || snapshotCount <= 0 || !classifications)
         return false;
-    *anyTarget = false;
     BYTE* base = reinterpret_cast<BYTE*>(meshDraw);
     for (int i = 0; i < dataCount; ++i)
     {
         classifications[i].ownerHandle = 0xFFFFFFFFu;
         classifications[i].kind = VISUAL_TARGET_NONE;
         BYTE* mesh = base + static_cast<SIZE_T>(i) * kMeshDataStride;
-        if (!IsAccessible(mesh, kMeshDataStride, false))
+        if (!ReadableCommittedRange(mesh, kMeshDataStride))
             return false;
         void** sceneSlot = reinterpret_cast<void**>(
             mesh + kMeshSceneObjectOffset);
-        if (!IsAccessible(sceneSlot, sizeof(void*), false) || !*sceneSlot)
+        if (!ReadableCommittedRange(sceneSlot, sizeof(void*)) || !*sceneSlot)
             continue;
-        if (VisualOwnerFromSceneObject(*sceneSlot, snapshot, snapshotCount,
-            &classifications[i].ownerHandle, &classifications[i].kind))
-            *anyTarget = true;
+        VisualOwnerFromSceneObject(*sceneSlot, snapshot, snapshotCount,
+            &classifications[i].ownerHandle, &classifications[i].kind);
     }
     return true;
+}
+
+static bool UniformTargetBatch(const MeshElementClassification* classifications,
+    int dataCount, unsigned int* ownerHandle, VisualTargetKind* targetKind)
+{
+    if (!classifications || dataCount <= 0 || !ownerHandle || !targetKind)
+        return false;
+    const unsigned int owner = classifications[0].ownerHandle;
+    const VisualTargetKind kind = classifications[0].kind;
+    if (owner == 0xFFFFFFFFu || kind == VISUAL_TARGET_NONE)
+        return false;
+    for (int i = 1; i < dataCount; ++i)
+    {
+        if (classifications[i].ownerHandle != owner ||
+            classifications[i].kind != kind)
+            return false;
+    }
+    *ownerHandle = owner;
+    *targetKind = kind;
+    return true;
+}
+
+static bool BatchHasAnyTarget(const MeshElementClassification* classifications,
+    int dataCount)
+{
+    if (!classifications || dataCount <= 0)
+        return false;
+    for (int i = 0; i < dataCount; ++i)
+        if (classifications[i].kind != VISUAL_TARGET_NONE)
+            return true;
+    return false;
 }
 
 static void CountTargetDraw(VisualTargetKind kind)
@@ -404,17 +465,13 @@ static bool CaptureMeshBatch(void* meshDraw, int dataCount,
     for (int i = 0; i < dataCount; ++i)
     {
         BYTE* mesh = base + static_cast<SIZE_T>(i) * kMeshDataStride;
-        if (!IsAccessible(mesh, kMeshDataStride, true))
+        if (!WritableCommittedRange(mesh, kMeshDataStride))
             return false;
-        void** material = reinterpret_cast<void**>(mesh + kMeshMaterialOffset);
-        void** material2 = reinterpret_cast<void**>(mesh + kMeshMaterial2Offset);
+        saved[i].material = *reinterpret_cast<void**>(
+            mesh + kMeshMaterialOffset);
+        saved[i].material2 = *reinterpret_cast<void**>(
+            mesh + kMeshMaterial2Offset);
         BYTE* color = mesh + kMeshColorOffset;
-        if (!IsAccessible(material, sizeof(void*), true) ||
-            !IsAccessible(material2, sizeof(void*), true) ||
-            !IsAccessible(color, 4, true))
-            return false;
-        saved[i].material = *material;
-        saved[i].material2 = *material2;
         saved[i].color[0] = color[0];
         saved[i].color[1] = color[1];
         saved[i].color[2] = color[2];
@@ -464,7 +521,7 @@ static void RestoreMeshBatch(void* meshDraw, int dataCount,
     for (int i = 0; i < dataCount; ++i)
     {
         BYTE* mesh = base + static_cast<SIZE_T>(i) * kMeshDataStride;
-        if (!IsAccessible(mesh, kMeshDataStride, true))
+        if (!WritableCommittedRange(mesh, kMeshDataStride))
             continue;
         *reinterpret_cast<void**>(mesh + kMeshMaterialOffset) = saved[i].material;
         *reinterpret_cast<void**>(mesh + kMeshMaterial2Offset) = saved[i].material2;
@@ -516,44 +573,17 @@ struct MeshRenderStateGuard {
     }
 };
 
-static bool RuntimeMaterialPointerUsable(void* material)
-{
-    if (!material || !IsAccessible(material, sizeof(void*), false))
-        return false;
-    MEMORY_BASIC_INFORMATION mbi{};
-    if (VirtualQuery(material, &mbi, sizeof(mbi)) != sizeof(mbi) ||
-        mbi.State != MEM_COMMIT || (mbi.Protect & (PAGE_NOACCESS | PAGE_GUARD)))
-        return false;
-    void* vtable = *reinterpret_cast<void**>(material);
-    if (!IsAccessible(vtable, sizeof(void*), false))
-        return false;
-    void* firstVirtual = *reinterpret_cast<void**>(vtable);
-    return IsExecutable(firstVirtual);
-}
-
-static bool SelectedVisibleChamsMaterialUsable()
-{
-    return g_materialManager.materialsReady &&
-        RuntimeMaterialPointerUsable(g_materialManager.flatVisible);
-}
-
-static bool SelectedOccludedChamsMaterialUsable()
-{
-    return g_materialManager.materialsReady &&
-        RuntimeMaterialPointerUsable(g_materialManager.flatOccluded);
-}
-
-static bool RenderTargetMeshRun(SceneDrawObjectFn original, void* a1, void* a2,
-    void* meshRun, int runCount, VisualTargetKind targetKind,
+static bool RenderTargetMeshBatch(SceneDrawObjectFn original, void* a1, void* a2,
+    void* meshDraw, int dataCount, VisualTargetKind targetKind,
     void* a5, void* a6, void* a7, void* a8, bool* resultOut)
 {
-    if (!original || !meshRun || runCount <= 0 || !resultOut)
+    if (!original || !meshDraw || dataCount <= 0 || !resultOut)
         return false;
 
     MeshRenderStateGuard stateGuard;
     stateGuard.captured = false;
     stateGuard.dirty = false;
-    if (!stateGuard.Capture(meshRun, runCount))
+    if (!stateGuard.Capture(meshDraw, dataCount))
         return false;
 
     const bool wantVisible = g_espConfig.chamsStyle == 0 ||
@@ -571,7 +601,7 @@ static bool RenderTargetMeshRun(SceneDrawObjectFn original, void* a1, void* a2,
         stateGuard.ApplyMaterial(g_materialManager.flatOccluded,
             g_espConfig.chamsColorOccluded);
         ++g_meshRenderBackend.occludedPasses;
-        result = original(a1, a2, meshRun, runCount, a5, a6, a7, a8);
+        result = original(a1, a2, meshDraw, dataCount, a5, a6, a7, a8);
         drew = true;
     }
     else if (wantOccluded)
@@ -590,12 +620,12 @@ static bool RenderTargetMeshRun(SceneDrawObjectFn original, void* a1, void* a2,
             ++g_meshRenderBackend.materialFallbacks;
         }
         ++g_meshRenderBackend.visiblePasses;
-        result = original(a1, a2, meshRun, runCount, a5, a6, a7, a8);
+        result = original(a1, a2, meshDraw, dataCount, a5, a6, a7, a8);
         drew = true;
     }
 
     if (!drew)
-        result = original(a1, a2, meshRun, runCount, a5, a6, a7, a8);
+        result = original(a1, a2, meshDraw, dataCount, a5, a6, a7, a8);
     *resultOut = result;
     return true;
 }
@@ -614,65 +644,38 @@ static bool __fastcall MeshDrawObjectHook(void* a1, void* a2, void* meshDraw,
         return original(a1, a2, meshDraw, dataCount, a5, a6, a7, a8);
 
     VisualTargetEntry snapshot[kMaxVisualTargets];
-    unsigned int snapshotGeneration = 0;
     const int snapshotCount = CopyVisualTargetSnapshot(snapshot,
-        kMaxVisualTargets, &snapshotGeneration);
+        kMaxVisualTargets, nullptr);
     if (snapshotCount <= 0)
         return original(a1, a2, meshDraw, dataCount, a5, a6, a7, a8);
 
     MeshElementClassification classifications[kMaxMeshBatch];
-    bool anyTarget = false;
     if (!ClassifyMeshBatch(meshDraw, dataCount, snapshot, snapshotCount,
-        classifications, &anyTarget))
+        classifications))
     {
         ++g_meshRenderBackend.layoutRejects;
         return original(a1, a2, meshDraw, dataCount, a5, a6, a7, a8);
     }
-    if (!anyTarget)
+
+    unsigned int ownerHandle = 0xFFFFFFFFu;
+    VisualTargetKind targetKind = VISUAL_TARGET_NONE;
+    if (!UniformTargetBatch(classifications, dataCount,
+        &ownerHandle, &targetKind))
+    {
+        if (BatchHasAnyTarget(classifications, dataCount))
+            ++g_meshRenderBackend.mixedBatches;
         return original(a1, a2, meshDraw, dataCount, a5, a6, a7, a8);
-
-    bool mixed = false;
-    for (int i = 1; i < dataCount; ++i)
-    {
-        if (classifications[i].kind != classifications[0].kind)
-        {
-            mixed = true;
-            break;
-        }
     }
-    if (mixed)
-        ++g_meshRenderBackend.mixedBatches;
 
-    BYTE* base = reinterpret_cast<BYTE*>(meshDraw);
+    (void)ownerHandle;
+    CountTargetDraw(targetKind);
     bool result = false;
-    int start = 0;
-    while (start < dataCount)
+    if (!RenderTargetMeshBatch(original, a1, a2, meshDraw, dataCount,
+        targetKind, a5, a6, a7, a8, &result))
     {
-        const VisualTargetKind runKind = classifications[start].kind;
-        int end = start + 1;
-        while (end < dataCount && classifications[end].kind == runKind)
-            ++end;
-        const int runCount = end - start;
-        void* run = base + static_cast<SIZE_T>(start) * kMeshDataStride;
-
-        if (runKind == VISUAL_TARGET_NONE)
-        {
-            result = original(a1, a2, run, runCount, a5, a6, a7, a8);
-        }
-        else
-        {
-            CountTargetDraw(runKind);
-            if (!RenderTargetMeshRun(original, a1, a2, run, runCount,
-                runKind, a5, a6, a7, a8, &result))
-            {
-                ++g_meshRenderBackend.layoutRejects;
-                result = original(a1, a2, run, runCount,
-                    a5, a6, a7, a8);
-            }
-        }
-        start = end;
+        ++g_meshRenderBackend.layoutRejects;
+        return original(a1, a2, meshDraw, dataCount, a5, a6, a7, a8);
     }
-    (void)snapshotGeneration;
     return result;
 }
 
@@ -686,8 +689,8 @@ static bool InstallMeshRenderBackend()
         if (g_meshRenderBackend.installAttempted)
             return false;
         // Missing scenesystem.dll is transient and does not consume the single
-        // structural signature attempt. Once the module exists, a mismatch is
-        // treated as a build/layout change and remains fail-closed.
+        // structural signature attempt. A signature mismatch after load is a
+        // build/layout change and remains fail-closed.
         if (!GetModuleHandleW(L"scenesystem.dll"))
             return false;
         g_meshRenderBackend.installAttempted = true;
@@ -717,9 +720,10 @@ static bool InstallMeshRenderBackend()
     const bool trampolineFlushed = FlushExecutableRange(
         g_drawObjectTrampoline, kDrawPatchSize * 2);
     DWORD ignored = 0;
-    VirtualProtect(g_drawObjectTrampoline, sizeof(g_drawObjectTrampoline),
-        trampolineProtection, &ignored);
-    if (!trampolineFlushed)
+    const bool trampolineProtectionRestored = VirtualProtect(
+        g_drawObjectTrampoline, sizeof(g_drawObjectTrampoline),
+        trampolineProtection, &ignored) != 0;
+    if (!trampolineFlushed || !trampolineProtectionRestored)
         return false;
 
     g_meshRenderBackend.originalDrawObject = reinterpret_cast<SceneDrawObjectFn>(
@@ -742,6 +746,7 @@ static bool InstallMeshRenderBackend()
 
 static bool RemoveMeshRenderBackend()
 {
+    // New calls become pure forwards before the entrypoint is touched.
     AtomicExchange(&g_meshHookBypass, 1);
     if (!g_meshRenderBackend.installed ||
         !g_meshRenderBackend.drawObjectTarget)
@@ -765,8 +770,8 @@ static bool RemoveMeshRenderBackend()
         Sleep(1);
     }
 
-    // Leave the trampoline/original pointer intact. If unpatching could not get
-    // a safe patch window, the installed detour remains in bypass-only mode and
-    // forwards every call unchanged instead of risking a partial restore.
+    // Never perform a racy raw restore. If a safe patch window cannot be
+    // obtained, leave the detour installed in bypass-only mode; it continues to
+    // call the intact trampoline/original and does not mutate renderer state.
     return false;
 }
