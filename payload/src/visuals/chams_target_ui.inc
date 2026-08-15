@@ -12,7 +12,7 @@ static void DrawChamsTargetControls(HDC hdc, const ESPConfig& cfg)
     // "Targets" on the same baseline as the title and made the new controls
     // look like they were not present at all.
     SetTextColor(hdc, RGB_COLOR(161, 161, 170));
-    RECT title = { 405, 145, 620, 166 };
+    RECT title = { 405, 145, 615, 166 };
     DrawTextW(hdc, L"Targets", -1, &title, DT_LEFT | DT_SINGLELINE);
 
     struct TargetRow {
@@ -26,10 +26,10 @@ static void DrawChamsTargetControls(HDC hdc, const ESPConfig& cfg)
         { L"Ally",     cfg.chamsAllies,         405, 194 },
         { L"Local",    cfg.chamsLocal,          405, 218 },
         { L"Weapons",  cfg.chamsWeapons,        405, 242 },
-        { L"Hands",    cfg.chamsHands,          515, 170 },
-        { L"Dropped",  cfg.chamsDroppedWeapons, 515, 194 },
-        { L"Nades",    cfg.chamsGrenades,       515, 218 },
-        { L"Bomb",     cfg.chamsBomb,           515, 242 }
+        { L"Hands",    cfg.chamsHands,          510, 170 },
+        { L"Dropped",  cfg.chamsDroppedWeapons, 510, 194 },
+        { L"Nades",    cfg.chamsGrenades,       510, 218 },
+        { L"Bomb",     cfg.chamsBomb,           510, 242 }
     };
 
     SetTextColor(hdc, RGB_COLOR(228, 228, 231));
@@ -37,10 +37,12 @@ static void DrawChamsTargetControls(HDC hdc, const ESPConfig& cfg)
     {
         DrawToggleSwitch(hdc, rows[i].x, rows[i].y, rows[i].active);
         RECT label = { rows[i].x + 43, rows[i].y,
-            rows[i].x + 110, rows[i].y + 20 };
+            rows[i].x + 105, rows[i].y + 20 };
         DrawTextW(hdc, rows[i].label, -1, &label,
             DT_LEFT | DT_VCENTER | DT_SINGLELINE);
     }
+
+    DrawChamsRuntimeDiagnostics(hdc);
 }
 
 static bool HandleChamsTargetClick(int mouseX, int mouseY)
@@ -53,7 +55,7 @@ static bool HandleChamsTargetClick(int mouseX, int mouseY)
         else if (mouseY >= 218 && mouseY <= 238) target = &g_espConfig.chamsLocal;
         else if (mouseY >= 242 && mouseY <= 262) target = &g_espConfig.chamsWeapons;
     }
-    else if (mouseX >= 515 && mouseX <= 553)
+    else if (mouseX >= 510 && mouseX <= 548)
     {
         if (mouseY >= 170 && mouseY <= 190) target = &g_espConfig.chamsHands;
         else if (mouseY >= 194 && mouseY <= 214) target = &g_espConfig.chamsDroppedWeapons;
