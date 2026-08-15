@@ -67,6 +67,13 @@ static void AddVisualTarget(unsigned int handle, VisualTargetKind kind)
     entry.kind = kind;
 }
 
+// Compatibility entry used by the legacy monolithic UpdateBotHighlights call
+// site. The richer category expansion happens inside the modular pipeline.
+static void AddEnemyVisualTarget(unsigned int handle)
+{
+    AddVisualTarget(handle, VISUAL_TARGET_ENEMY_PAWN);
+}
+
 static void AddEnemyPawnVisualTargets(const BotHighlightRuntime& runtime,
     unsigned int pawnHandle, void* pawn)
 {
