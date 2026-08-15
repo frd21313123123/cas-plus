@@ -77,6 +77,29 @@ static unsigned int HudArmsHandleForPawn(const BotHighlightRuntime& runtime,
     return *reinterpret_cast<unsigned int*>(slot);
 }
 
+static void CountPlayerTargetIfAdded(int before)
+{
+    if (g_visualTargetBuildCount != before)
+        ++g_visualTargetCollectorStats.playerTargets;
+}
+
+// Scene-system player meshes are not guaranteed to expose the pawn as their
+// CSceneAnimatableObject owner. Current CS2 DrawObject implementations also
+// observe player geometry owned by the corresponding player controller. Keep
+// the registry strict/full-handle based, but publish that controller as an
+// explicit alias for the same visual target kind. No index-only matching or
+// neighboring memory scan is introduced in the render hook.
+static void AddPlayerControllerOwnerAlias(void* controller,
+    VisualTargetKind pawnKind, bool enabled)
+{
+    if (!enabled || !controller)
+        return;
+    const unsigned int controllerHandle = EntityHandleFor(controller);
+    const int before = g_visualTargetBuildCount;
+    AddVisualTarget(controllerHandle, pawnKind);
+    CountPlayerTargetIfAdded(before);
+}
+
 static void AddPlayerVisualTargetWithGear(const BotHighlightRuntime& runtime,
     unsigned int pawnHandle, void* pawn, VisualTargetKind pawnKind,
     VisualTargetKind weaponKind, bool addPawn, bool addWeapon, bool addArms)
@@ -87,8 +110,7 @@ static void AddPlayerVisualTargetWithGear(const BotHighlightRuntime& runtime,
     {
         const int before = g_visualTargetBuildCount;
         AddVisualTarget(pawnHandle, pawnKind);
-        if (g_visualTargetBuildCount != before)
-            ++g_visualTargetCollectorStats.playerTargets;
+        CountPlayerTargetIfAdded(before);
     }
     if (addWeapon)
     {
@@ -150,6 +172,8 @@ static void CollectPlayerVisualTargets(const BotHighlightRuntime& runtime,
             VISUAL_TARGET_LOCAL_PAWN, VISUAL_TARGET_LOCAL_WEAPON,
             g_espConfig.chamsLocal, g_espConfig.chamsWeapons,
             g_espConfig.chamsHands);
+        AddPlayerControllerOwnerAlias(localController,
+            VISUAL_TARGET_LOCAL_PAWN, g_espConfig.chamsLocal);
     }
 
     const int boundedCount = controllerCount > 64 ? 64 : controllerCount;
@@ -178,10 +202,14 @@ static void CollectPlayerVisualTargets(const BotHighlightRuntime& runtime,
                 VISUAL_TARGET_ALLY_PAWN, VISUAL_TARGET_ALLY_WEAPON,
                 g_espConfig.chamsAllies,
                 g_espConfig.chamsAllies && g_espConfig.chamsWeapons, false);
+            AddPlayerControllerOwnerAlias(controller,
+                VISUAL_TARGET_ALLY_PAWN, g_espConfig.chamsAllies);
         }
         else
         {
             AddEnemyPawnVisualTargets(runtime, *pawnHandle, pawn);
+            AddPlayerControllerOwnerAlias(controller,
+                VISUAL_TARGET_ENEMY_PAWN, g_espConfig.chamsEnemies);
         }
     }
 }
