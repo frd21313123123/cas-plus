@@ -1,6 +1,6 @@
 // Generated into dllmain.cpp's translation unit by apply-chams-render-pipeline.ps1.
-// Keep this module CRT-free. FrameStageNotify owns compatibility entity state;
-// the scene-system hook owns per-draw mesh state when available.
+// FrameStageNotify owns compatibility entity state; the scene-system hook owns
+// per-draw mesh state when its guarded backend is available.
 
 struct ChamsPassPlan {
     bool visibleMaterial;
@@ -11,7 +11,7 @@ struct ChamsPassPlan {
 struct ChamsRenderStats {
     unsigned int modelUpdates;
     unsigned int visibleFallbackPasses;
-    unsigned int occludedPasses;
+    unsigned int occludedFallbackPasses;
     unsigned int glowPasses;
     unsigned int restores;
     unsigned int failures;
@@ -45,8 +45,8 @@ static ChamsPassPlan BuildChamsPassPlan(bool allowVisiblePass,
         }
     }
 
-    // Glow is independent from Chams. Style 3 remains only as a compatibility
-    // alias for old configs that encoded Glow Only inside the Chams selector.
+    // Glow is independent from Chams. Style 3 remains a compatibility alias
+    // for configs that historically encoded Glow Only in the Chams selector.
     if ((g_espConfig.glow || (g_espConfig.chams && g_espConfig.chamsStyle == 3)) &&
         allowOccludedPass)
         plan.glowHighlight = true;
@@ -110,7 +110,7 @@ static void ApplyHighlightPass(const BotHighlightRuntime& runtime,
     if (glowOnly)
         ++g_chamsRenderStats.glowPasses;
     else
-        ++g_chamsRenderStats.occludedPasses;
+        ++g_chamsRenderStats.occludedFallbackPasses;
 }
 
 static bool ApplyModelPasses(const BotHighlightRuntime& runtime,
@@ -147,13 +147,12 @@ static bool ApplyModelPasses(const BotHighlightRuntime& runtime,
 
     const ChamsPassPlan plan = BuildChamsPassPlan(allowVisiblePass,
         allowOccludedPass);
+    const bool enemyMeshTarget = IsEnemyVisualTarget(entityHandle);
 
-    // Enemy player meshes are tinted at the actual DrawObject call when the
-    // guarded scene-system backend is live. Keep the entity's replicated render
-    // color original in that case, so there is one clear owner for visible
-    // color. Weapons/local models still use the compatibility entity tint.
+    // Once DrawObject owns an enemy mesh, keep replicated entity tint original.
+    // The mesh backend applies and restores color per draw call instead.
     const bool meshOwnsVisiblePass = plan.visibleMaterial &&
-        g_meshRenderBackend.installed && IsEnemyVisualTarget(entityHandle);
+        g_meshRenderBackend.installed && enemyMeshTarget;
     if (meshOwnsVisiblePass)
     {
         RestoreVisibleMaterialPass(runtime, modelEntity, *original, renderColor,
@@ -171,11 +170,29 @@ static bool ApplyModelPasses(const BotHighlightRuntime& runtime,
     }
 
     BYTE* glowBase = reinterpret_cast<BYTE*>(modelEntity) + runtime.glowOffset;
-    if (plan.occludedHighlight)
+    const bool materialOwnsOccludedPass = plan.occludedHighlight &&
+        g_meshRenderBackend.installed && g_materialManager.materialsReady &&
+        enemyMeshTarget;
+
+    if (materialOwnsOccludedPass)
     {
-        // Compatibility backend only. MaterialManager will replace this branch
-        // with a true Ignore-Z mesh draw once runtime material creation is
-        // verified on the current CS2 build.
+        // True Ignore-Z mesh Chams already owns the wall pass. Standalone Glow
+        // remains independent and may be layered on top if explicitly enabled.
+        if (plan.glowHighlight)
+        {
+            ApplyHighlightPass(runtime, glowBase, g_espConfig.glowColor,
+                eligible, glowing, true);
+        }
+        else
+        {
+            RestoreHighlightPass(runtime, glowBase, *original, glowColor,
+                eligible, glowing);
+        }
+    }
+    else if (plan.occludedHighlight)
+    {
+        // Compatibility fallback for builds where the scene/material backend
+        // cannot be resolved safely.
         ApplyHighlightPass(runtime, glowBase, g_espConfig.chamsColorOccluded,
             eligible, glowing, false);
     }
@@ -190,6 +207,6 @@ static bool ApplyModelPasses(const BotHighlightRuntime& runtime,
             eligible, glowing);
     }
 
-    return meshOwnsVisiblePass || plan.visibleMaterial ||
-        plan.occludedHighlight || plan.glowHighlight;
+    return meshOwnsVisiblePass || materialOwnsOccludedPass ||
+        plan.visibleMaterial || plan.occludedHighlight || plan.glowHighlight;
 }
