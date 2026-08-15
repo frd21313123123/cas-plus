@@ -10,15 +10,17 @@ $ErrorActionPreference = 'Stop'
 
 $source = Get-Content -LiteralPath $InputPath -Raw -Encoding UTF8
 $sourceDirectory = Split-Path -Parent $InputPath
+$noCrtMemoryPath = Join-Path $sourceDirectory 'core\no_crt_memory.inc'
 $pipelinePath = Join-Path $sourceDirectory 'visuals\chams_render_pipeline.inc'
 $targetRegistryPath = Join-Path $sourceDirectory 'visuals\visual_target_registry.inc'
 $materialManagerPath = Join-Path $sourceDirectory 'visuals\material_manager.inc'
 $meshBackendPath = Join-Path $sourceDirectory 'visuals\mesh_render_probe.inc'
-foreach ($requiredPath in @($pipelinePath, $targetRegistryPath, $materialManagerPath, $meshBackendPath)) {
+foreach ($requiredPath in @($noCrtMemoryPath, $pipelinePath, $targetRegistryPath, $materialManagerPath, $meshBackendPath)) {
     if (-not (Test-Path -LiteralPath $requiredPath)) {
         throw "Visual renderer module was not found: $requiredPath"
     }
 }
+$noCrtMemory = Get-Content -LiteralPath $noCrtMemoryPath -Raw -Encoding UTF8
 $newPipeline = Get-Content -LiteralPath $pipelinePath -Raw -Encoding UTF8
 $targetRegistry = Get-Content -LiteralPath $targetRegistryPath -Raw -Encoding UTF8
 $materialManager = Get-Content -LiteralPath $materialManagerPath -Raw -Encoding UTF8
@@ -54,8 +56,8 @@ $end = $source.IndexOf($endAnchor)
 if ($start -lt 0 -or $end -le $start) {
     throw 'ApplyModelPasses anchors were not found. The payload source changed; refusing to patch blindly.'
 }
-$generatedVisualBackend = $targetRegistry + "`r`n" + $materialManager + "`r`n" +
-    $meshBackend + "`r`n" + $newPipeline + "`r`n"
+$generatedVisualBackend = $noCrtMemory + "`r`n" + $targetRegistry + "`r`n" +
+    $materialManager + "`r`n" + $meshBackend + "`r`n" + $newPipeline + "`r`n"
 $source = $source.Substring(0, $start) + $generatedVisualBackend + $source.Substring($end)
 
 # Keep target selection in FrameStageNotify. DrawObject consumes a previously
