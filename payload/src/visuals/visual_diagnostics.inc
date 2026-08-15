@@ -46,3 +46,43 @@ static void AppendVisualRendererDiagnostics(WideStatusBuilder* status)
     AppendStatusText(status, L", lr ");
     AppendStatusUnsigned(status, g_meshRenderBackend.layoutRejects);
 }
+
+// Permanent on-screen diagnostics for the Chams settings modal. Unlike the
+// legacy status label this is visible exactly where renderer settings are
+// changed, so runtime validation does not depend on a narrow child control.
+static void DrawChamsRuntimeDiagnostics(HDC hdc)
+{
+    WideStatusBuilder first;
+    first.length = 0;
+    first.text[0] = 0;
+    AppendStatusText(&first, L"Renderer: ");
+    AppendStatusText(&first, g_meshRenderBackend.installed ? L"MESH" : L"LEGACY");
+    AppendStatusText(&first, L" | Material: ");
+    AppendStatusText(&first, g_materialManager.materialsReady ? L"ON" : L"OFF");
+    AppendStatusText(&first, L" | target ");
+    AppendStatusUnsigned(&first, g_meshRenderBackend.targetDraws);
+
+    WideStatusBuilder second;
+    second.length = 0;
+    second.text[0] = 0;
+    AppendStatusText(&second, L"iz ");
+    AppendStatusUnsigned(&second, g_meshRenderBackend.occludedPasses);
+    AppendStatusText(&second, L" | vis ");
+    AppendStatusUnsigned(&second, g_meshRenderBackend.visiblePasses);
+    AppendStatusText(&second, L" | mix ");
+    AppendStatusUnsigned(&second, g_meshRenderBackend.mixedBatches);
+    AppendStatusText(&second, L" | ownrej ");
+    AppendStatusUnsigned(&second, g_meshRenderBackend.ownershipRejects);
+    AppendStatusText(&second, L" | pf ");
+    AppendStatusUnsigned(&second, g_meshRenderBackend.patchFailures);
+    AppendStatusText(&second, L" | rip ");
+    AppendStatusUnsigned(&second, g_meshRenderBackend.ripDeferrals);
+
+    SetTextColor(hdc, RGB_COLOR(161, 161, 170));
+    RECT firstLine = { 235, 338, 625, 356 };
+    DrawTextW(hdc, first.text, -1, &firstLine,
+        DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    RECT secondLine = { 235, 357, 625, 375 };
+    DrawTextW(hdc, second.text, -1, &secondLine,
+        DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+}
