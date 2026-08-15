@@ -1,6 +1,6 @@
 // Generated into dllmain.cpp's translation unit by apply-chams-render-pipeline.ps1.
 // FrameStageNotify owns compatibility entity state; the scene-system hook owns
-// per-draw mesh state when its guarded backend is available.
+// per-draw mesh state only after a recent successful target confirmation.
 
 struct ChamsPassPlan {
     bool visibleMaterial;
@@ -30,14 +30,14 @@ static ChamsPassPlan BuildChamsPassPlan(bool allowVisiblePass,
     {
         switch (g_espConfig.chamsStyle)
         {
-        case 0: // Visible + Occluded
+        case 0:
             plan.visibleMaterial = allowVisiblePass;
             plan.occludedHighlight = allowOccludedPass;
             break;
-        case 1: // Visible Only
+        case 1:
             plan.visibleMaterial = allowVisiblePass;
             break;
-        case 2: // Occluded Only
+        case 2:
             plan.occludedHighlight = allowOccludedPass;
             break;
         default:
@@ -45,9 +45,8 @@ static ChamsPassPlan BuildChamsPassPlan(bool allowVisiblePass,
         }
     }
 
-    // Glow is independent from Chams. Style 3 remains a compatibility alias
-    // for configs that historically encoded Glow Only in the Chams selector.
-    if ((g_espConfig.glow || (g_espConfig.chams && g_espConfig.chamsStyle == 3)) &&
+    if ((g_espConfig.glow ||
+        (g_espConfig.chams && g_espConfig.chamsStyle == 3)) &&
         allowOccludedPass)
         plan.glowHighlight = true;
 
@@ -119,8 +118,6 @@ static bool ApplyModelPasses(const BotHighlightRuntime& runtime,
 {
     ++g_chamsRenderStats.modelUpdates;
 
-    // The legacy controller loop publishes the enemy pawn first. Expand that
-    // typed entry here while the same Schema-backed pawn/runtime are available.
     if (VisualTargetKindBeingBuilt(entityHandle) == VISUAL_TARGET_ENEMY_PAWN)
         AddEnemyPawnVisualTargets(runtime, entityHandle, modelEntity);
 
@@ -157,8 +154,11 @@ static bool ApplyModelPasses(const BotHighlightRuntime& runtime,
     const bool meshTarget = targetKind != VISUAL_TARGET_NONE &&
         VisualTargetKindEnabled(targetKind);
 
-    const bool meshOwnsVisiblePass = plan.visibleMaterial &&
-        g_meshRenderBackend.installed && meshTarget;
+    // Installation is not ownership. Keep the legacy visible tint until this
+    // exact full handle/kind has successfully traversed the mesh renderer in the
+    // current or immediately preceding published target generation.
+    const bool meshOwnsVisiblePass = plan.visibleMaterial && meshTarget &&
+        MeshTargetPassRecentlyConfirmed(entityHandle, targetKind, false);
     if (meshOwnsVisiblePass)
     {
         RestoreVisibleMaterialPass(runtime, modelEntity, *original, renderColor,
@@ -176,17 +176,16 @@ static bool ApplyModelPasses(const BotHighlightRuntime& runtime,
     }
 
     BYTE* glowBase = reinterpret_cast<BYTE*>(modelEntity) + runtime.glowOffset;
-    // Do not suppress the compatibility wall pass merely because materials were
-    // once created. Ownership transfers only while the currently selected
-    // Ignore-Z material is still a committed object with a valid vtable.
-    const bool materialOwnsOccludedPass = plan.occludedHighlight &&
-        g_meshRenderBackend.installed && SelectedOccludedChamsMaterialUsable() &&
-        meshTarget && VisualTargetAllowsOccludedPass(targetKind);
+    // Occluded ownership additionally requires the selected material to remain
+    // valid now. A mixed/layout-rejected target invalidates recent confirmation,
+    // causing the compatibility wall pass to stay active instead of disappearing.
+    const bool materialOwnsOccludedPass = plan.occludedHighlight && meshTarget &&
+        VisualTargetAllowsOccludedPass(targetKind) &&
+        SelectedOccludedChamsMaterialUsable() &&
+        MeshTargetPassRecentlyConfirmed(entityHandle, targetKind, true);
 
     if (materialOwnsOccludedPass)
     {
-        // True Ignore-Z mesh Chams owns the wall pass. Standalone Glow remains
-        // an independent compatibility/effect backend and can be layered.
         if (plan.glowHighlight)
         {
             ApplyHighlightPass(runtime, glowBase, g_espConfig.glowColor,
@@ -200,8 +199,6 @@ static bool ApplyModelPasses(const BotHighlightRuntime& runtime,
     }
     else if (plan.occludedHighlight)
     {
-        // Compatibility fallback for entities already participating in the
-        // legacy model/glow path when the scene/material backend is unavailable.
         ApplyHighlightPass(runtime, glowBase, g_espConfig.chamsColorOccluded,
             eligible, glowing, false);
     }
