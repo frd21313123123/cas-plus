@@ -53,6 +53,31 @@ Replace-Required @'
                     InvalidateRect(wnd, nullptr, FALSE);
 '@ 'close visual modals on tab switch'
 
+# Diagnostics status dots need both a real brush and a real pen. Selecting a
+# NULL_BRUSH into the DC as though it were a pen left the temporary brush
+# selected and then deleted it. Restore both object types explicitly instead.
+Replace-Required @'
+    const COLORREF c = ready ? RGB_COLOR(132, 204, 22) : RGB_COLOR(239, 68, 68);
+    HBRUSH b = CreateSolidBrush(c);
+    HGDIOBJ oldBrush = SelectObject(hdc, b);
+    HGDIOBJ oldPen = SelectObject(hdc, GetStockObject(5));
+    Ellipse(hdc, 345, y + 5, 357, y + 17);
+    SelectObject(hdc, oldBrush);
+    SelectObject(hdc, oldPen);
+    DeleteObject(b);
+'@ @'
+    const COLORREF c = ready ? RGB_COLOR(132, 204, 22) : RGB_COLOR(239, 68, 68);
+    HBRUSH b = CreateSolidBrush(c);
+    HPEN p = CreatePen(PS_SOLID, 1, c);
+    HGDIOBJ oldBrush = SelectObject(hdc, b);
+    HGDIOBJ oldPen = SelectObject(hdc, p);
+    Ellipse(hdc, 345, y + 5, 357, y + 17);
+    SelectObject(hdc, oldBrush);
+    SelectObject(hdc, oldPen);
+    DeleteObject(b);
+    DeleteObject(p);
+'@ 'diagnostic status-dot GDI lifetime'
+
 $outputDirectory = Split-Path -Parent $OutputPath
 if ($outputDirectory) {
     New-Item -ItemType Directory -Path $outputDirectory -Force | Out-Null
