@@ -16,7 +16,8 @@ $targetRegistryPath = Join-Path $sourceDirectory 'visuals\visual_target_registry
 $materialManagerPath = Join-Path $sourceDirectory 'visuals\material_manager.inc'
 $materialUiPath = Join-Path $sourceDirectory 'visuals\chams_material_ui.inc'
 $meshBackendPath = Join-Path $sourceDirectory 'visuals\mesh_render_probe.inc'
-foreach ($requiredPath in @($noCrtMemoryPath, $pipelinePath, $targetRegistryPath, $materialManagerPath, $materialUiPath, $meshBackendPath)) {
+$diagnosticsPath = Join-Path $sourceDirectory 'visuals\visual_diagnostics.inc'
+foreach ($requiredPath in @($noCrtMemoryPath, $pipelinePath, $targetRegistryPath, $materialManagerPath, $materialUiPath, $meshBackendPath, $diagnosticsPath)) {
     if (-not (Test-Path -LiteralPath $requiredPath)) {
         throw "Visual renderer module was not found: $requiredPath"
     }
@@ -27,6 +28,7 @@ $targetRegistry = Get-Content -LiteralPath $targetRegistryPath -Raw -Encoding UT
 $materialManager = Get-Content -LiteralPath $materialManagerPath -Raw -Encoding UTF8
 $materialUi = Get-Content -LiteralPath $materialUiPath -Raw -Encoding UTF8
 $meshBackend = Get-Content -LiteralPath $meshBackendPath -Raw -Encoding UTF8
+$diagnostics = Get-Content -LiteralPath $diagnosticsPath -Raw -Encoding UTF8
 
 $oldConfig = @'
     bool chams = true;
@@ -34,7 +36,6 @@ $oldConfig = @'
     RGBVal chamsColorVisible = { 132, 204, 22 };  // normal depth-tested model pass
     int chamsStyle = 0; // 0: Dual Pass, 1: Visible Only, 2: Through Wall Only, 3: Glow Pass
 '@
-
 $newConfig = @'
     bool chams = true;
     // The scene-system renderer owns enemy mesh passes whenever its guarded
@@ -45,7 +46,6 @@ $newConfig = @'
     // 3: legacy Glow Only compatibility mode.
     int chamsStyle = 0;
 '@
-
 if (-not $source.Contains($oldConfig)) {
     throw 'Chams config anchor was not found. The payload source changed; refusing to patch blindly.'
 }
@@ -60,13 +60,9 @@ if ($start -lt 0 -or $end -le $start) {
 }
 $generatedVisualBackend = $noCrtMemory + "`r`n" + $targetRegistry + "`r`n" +
     $materialManager + "`r`n" + $materialUi + "`r`n" + $meshBackend + "`r`n" +
-    $newPipeline + "`r`n"
+    $diagnostics + "`r`n" + $newPipeline + "`r`n"
 $source = $source.Substring(0, $start) + $generatedVisualBackend + $source.Substring($end)
 
-# Keep target selection in FrameStageNotify. DrawObject consumes a previously
-# published complete snapshot while a fresh list is built off to the side.
-# Material creation also runs here so KeyValues3/MaterialSystem2 calls stay on
-# the CS2 game/render lifecycle rather than the manual-map worker thread.
 $updateStartAnchor = @'
 static int UpdateBotHighlights(BotHighlightStats* stats)
 {
@@ -79,9 +75,7 @@ static int UpdateBotHighlights(BotHighlightStats* stats)
     BeginVisualTargetUpdate();
     if (stats)
 '@
-if (-not $source.Contains($updateStartAnchor)) {
-    throw 'Visual-target update anchor was not found. Refusing to patch blindly.'
-}
+if (-not $source.Contains($updateStartAnchor)) { throw 'Visual-target update anchor was not found. Refusing to patch blindly.' }
 $source = $source.Replace($updateStartAnchor, $updateStartReplacement)
 
 $runtimeAnchor = @'
@@ -95,9 +89,7 @@ $runtimeReplacement = @'
         return BOT_HIGHLIGHT_ERR_RUNTIME;
     }
 '@
-if (-not $source.Contains($runtimeAnchor)) {
-    throw 'Entity-runtime failure anchor was not found. Refusing to patch blindly.'
-}
+if (-not $source.Contains($runtimeAnchor)) { throw 'Entity-runtime failure anchor was not found. Refusing to patch blindly.' }
 $source = $source.Replace($runtimeAnchor, $runtimeReplacement)
 
 $schemaAnchor = @'
@@ -113,9 +105,7 @@ $schemaReplacement = @'
             return BOT_HIGHLIGHT_ERR_SCHEMA;
         }
 '@
-if (-not $source.Contains($schemaAnchor)) {
-    throw 'Schema failure anchor was not found. Refusing to patch blindly.'
-}
+if (-not $source.Contains($schemaAnchor)) { throw 'Schema failure anchor was not found. Refusing to patch blindly.' }
 $source = $source.Replace($schemaAnchor, $schemaReplacement)
 
 $mapAnchor = @'
@@ -131,9 +121,7 @@ $mapReplacement = @'
         return BOT_HIGHLIGHT_WAITING_MAP;
     }
 '@
-if (-not $source.Contains($mapAnchor)) {
-    throw 'Map wait anchor was not found. Refusing to patch blindly.'
-}
+if (-not $source.Contains($mapAnchor)) { throw 'Map wait anchor was not found. Refusing to patch blindly.' }
 $source = $source.Replace($mapAnchor, $mapReplacement)
 
 $targetApplyAnchor = @'
@@ -151,9 +139,7 @@ $targetApplyReplacement = @'
             stats)
             ++stats->highlighted;
 '@
-if (-not $source.Contains($targetApplyAnchor)) {
-    throw 'Enemy visual-target publication anchor was not found. Refusing to patch blindly.'
-}
+if (-not $source.Contains($targetApplyAnchor)) { throw 'Enemy visual-target publication anchor was not found. Refusing to patch blindly.' }
 $source = $source.Replace($targetApplyAnchor, $targetApplyReplacement)
 
 $publishAnchor = @'
@@ -167,9 +153,7 @@ $publishReplacement = @'
 
     int destination = 0;
 '@
-if (-not $source.Contains($publishAnchor)) {
-    throw 'Visual-target publish anchor was not found. Refusing to patch blindly.'
-}
+if (-not $source.Contains($publishAnchor)) { throw 'Visual-target publish anchor was not found. Refusing to patch blindly.' }
 $source = $source.Replace($publishAnchor, $publishReplacement)
 
 $oldTeamFallback = @'
@@ -186,9 +170,7 @@ $newTeamFallback = @'
         return BOT_HIGHLIGHT_WAITING_LOCAL;
     }
 '@
-if (-not $source.Contains($oldTeamFallback)) {
-    throw 'Local-team fallback anchor was not found. Refusing to patch blindly.'
-}
+if (-not $source.Contains($oldTeamFallback)) { throw 'Local-team fallback anchor was not found. Refusing to patch blindly.' }
 $source = $source.Replace($oldTeamFallback, $newTeamFallback)
 
 $localIdentityAnchor = @'
@@ -206,9 +188,7 @@ $localIdentityReplacement = @'
         return BOT_HIGHLIGHT_WAITING_LOCAL;
     }
 '@
-if (-not $source.Contains($localIdentityAnchor)) {
-    throw 'Local identity wait anchor was not found. Refusing to patch blindly.'
-}
+if (-not $source.Contains($localIdentityAnchor)) { throw 'Local identity wait anchor was not found. Refusing to patch blindly.' }
 $source = $source.Replace($localIdentityAnchor, $localIdentityReplacement)
 
 $oldBotBookkeeping = @'
@@ -230,13 +210,9 @@ $oldBotBookkeeping = @'
     }
 
 '@
-if (-not $source.Contains($oldBotBookkeeping)) {
-    throw 'Stale bot bookkeeping anchor was not found. Refusing to patch blindly.'
-}
+if (-not $source.Contains($oldBotBookkeeping)) { throw 'Stale bot bookkeeping anchor was not found. Refusing to patch blindly.' }
 $source = $source.Replace($oldBotBookkeeping, '')
 
-# Add independent material selectors to the existing Chams modal without moving
-# the rest of the Win32 UI into the renderer modules yet.
 $materialDrawAnchor = @'
     DrawToggleSwitch(hdc, 390, 235, cfg.chamsWeapons);
     RECT wRc = { 435, 235, 540, 255 };
@@ -253,9 +229,7 @@ $materialDrawReplacement = @'
 
     DrawRoundedCard(hdc, 235, 335, 310, 32, RGB_COLOR(39, 39, 45), RGB_COLOR(60, 60, 70), 6);
 '@
-if (-not $source.Contains($materialDrawAnchor)) {
-    throw 'Chams material UI draw anchor was not found. Refusing to patch blindly.'
-}
+if (-not $source.Contains($materialDrawAnchor)) { throw 'Chams material UI draw anchor was not found. Refusing to patch blindly.' }
 $source = $source.Replace($materialDrawAnchor, $materialDrawReplacement)
 
 $materialClickAnchor = @'
@@ -271,10 +245,25 @@ $materialClickReplacement = @'
             if ((mouseX >= 235 && mouseX <= 545 && mouseY >= 335 && mouseY <= 367) ||
                 mouseX < 220 || mouseX > 560 || mouseY < 110 || mouseY > 380)
 '@
-if (-not $source.Contains($materialClickAnchor)) {
-    throw 'Chams material UI click anchor was not found. Refusing to patch blindly.'
-}
+if (-not $source.Contains($materialClickAnchor)) { throw 'Chams material UI click anchor was not found. Refusing to patch blindly.' }
 $source = $source.Replace($materialClickAnchor, $materialClickReplacement)
+
+# Append backend state to the existing compact visual status text.
+$statusAnchor = @'
+    SetBotStatus(status.text);
+}
+
+static void DrawRoundedCard(HDC hdc, int x, int y, int w, int h, COLORREF bg, COLORREF border, int radius)
+'@
+$statusReplacement = @'
+    AppendVisualRendererDiagnostics(&status);
+    SetBotStatus(status.text);
+}
+
+static void DrawRoundedCard(HDC hdc, int x, int y, int w, int h, COLORREF bg, COLORREF border, int radius)
+'@
+if (-not $source.Contains($statusAnchor)) { throw 'Visual diagnostics status anchor was not found. Refusing to patch blindly.' }
+$source = $source.Replace($statusAnchor, $statusReplacement)
 
 $startupAnchor = @'
     if (!InstallFrameStageBridge())
@@ -300,9 +289,7 @@ $startupReplacement = @'
     }
     PositionMenuOverGame();
 '@
-if (-not $source.Contains($startupAnchor)) {
-    throw 'Frame-stage startup anchor was not found. Refusing to patch blindly.'
-}
+if (-not $source.Contains($startupAnchor)) { throw 'Frame-stage startup anchor was not found. Refusing to patch blindly.' }
 $source = $source.Replace($startupAnchor, $startupReplacement)
 
 $shutdownAnchor = @'
@@ -320,9 +307,7 @@ $shutdownReplacement = @'
     RemoveFrameStageBridge();
     return 0;
 '@
-if (-not $source.Contains($shutdownAnchor)) {
-    throw 'Payload shutdown anchor was not found. Refusing to patch blindly.'
-}
+if (-not $source.Contains($shutdownAnchor)) { throw 'Payload shutdown anchor was not found. Refusing to patch blindly.' }
 $source = $source.Replace($shutdownAnchor, $shutdownReplacement)
 
 $source = $source.Replace(
@@ -331,10 +316,9 @@ $source = $source.Replace(
 $source = $source.Replace(
     'L"Chams: model + through-wall passes active"',
     'L"Chams: scene mesh backend + compatibility fallback"')
+$source = $source.Replace('AppendStatusText(&status, L", bots ");', 'AppendStatusText(&status, L", targets ");')
 
 $outputDirectory = Split-Path -Parent $OutputPath
-if ($outputDirectory) {
-    New-Item -ItemType Directory -Path $outputDirectory -Force | Out-Null
-}
+if ($outputDirectory) { New-Item -ItemType Directory -Path $outputDirectory -Force | Out-Null }
 Set-Content -LiteralPath $OutputPath -Value $source -Encoding UTF8 -NoNewline
 Write-Host "Generated modular visual render-pipeline source: $OutputPath"
