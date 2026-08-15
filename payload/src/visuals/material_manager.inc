@@ -214,16 +214,28 @@ static int ClampChamsMaterialPreset(int preset)
     return preset;
 }
 
-static bool RuntimeMaterialPointerUsable(void* material)
+static bool MaterialRangeCommittedReadable(const void* address, SIZE_T bytes)
 {
-    if (!material || !IsAccessible(material, sizeof(void*), false))
+    if (!address || bytes == 0)
         return false;
     MEMORY_BASIC_INFORMATION mbi{};
-    if (VirtualQuery(material, &mbi, sizeof(mbi)) != sizeof(mbi) ||
+    if (VirtualQuery(address, &mbi, sizeof(mbi)) != sizeof(mbi) ||
         mbi.State != MEM_COMMIT || (mbi.Protect & (PAGE_NOACCESS | PAGE_GUARD)))
         return false;
+    const ULONG_PTR start = reinterpret_cast<ULONG_PTR>(address);
+    const ULONG_PTR region = reinterpret_cast<ULONG_PTR>(mbi.BaseAddress);
+    if (start < region)
+        return false;
+    const SIZE_T offset = static_cast<SIZE_T>(start - region);
+    return offset <= mbi.RegionSize && bytes <= mbi.RegionSize - offset;
+}
+
+static bool RuntimeMaterialPointerUsable(void* material)
+{
+    if (!MaterialRangeCommittedReadable(material, sizeof(void*)))
+        return false;
     void* vtable = *reinterpret_cast<void**>(material);
-    if (!IsAccessible(vtable, sizeof(void*), false))
+    if (!MaterialRangeCommittedReadable(vtable, sizeof(void*)))
         return false;
     void* firstVirtual = *reinterpret_cast<void**>(vtable);
     return IsExecutable(firstVirtual);
@@ -365,8 +377,8 @@ static void* CreateRuntimeMaterial(const char* name, const char* vmat,
     handle.binding = nullptr;
     g_materialManager.createMaterial(g_materialManager.materialSystem, &handle,
         name, kv3, 0U, 1U);
-    if (!handle.binding || !IsAccessible(handle.binding,
-        sizeof(MaterialResourceBinding), false) ||
+    if (!handle.binding || !MaterialRangeCommittedReadable(handle.binding,
+        sizeof(MaterialResourceBinding)) ||
         !RuntimeMaterialPointerUsable(handle.binding->data))
         return nullptr;
     return handle.binding->data;
