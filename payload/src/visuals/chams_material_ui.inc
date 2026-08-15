@@ -62,19 +62,6 @@ static bool HandleChamsMaterialPresetClick(int mouseX, int mouseY)
     return false;
 }
 
-// The payload intentionally links /NODEFAULTLIB. MSVC may lower aggregate
-// zero-initialization in the following mesh module to memset, so force a real
-// function call and provide the tiny implementation locally instead of CRT.
-#pragma function(memset)
-extern "C" void* memset(void* destination, int value, SIZE_T count)
-{
-    volatile BYTE* cursor = reinterpret_cast<volatile BYTE*>(destination);
-    const BYTE byteValue = static_cast<BYTE>(value);
-    for (SIZE_T i = 0; i < count; ++i)
-        cursor[i] = byteValue;
-    return destination;
-}
-
 // Keep the large x64 CONTEXT and suspended-thread set in separate stack frames;
 // otherwise LTCG can inline them together and request the CRT __chkstk helper.
 #pragma auto_inline(off)
