@@ -1,32 +1,41 @@
 // Source 2 scene-system mesh renderer backend.
 //
-// The hook is intentionally fail-closed:
-//  * DrawObject must match one unique executable signature.
-//  * the overwritten 12-byte prologue must be relocation-safe.
-//  * mesh/scene-object slots are range checked before every access.
-//  * only handles already published by the frame-stage target registry are
-//    modified, keeping schema/entity selection out of the render hot path.
+// Current backend target: CAnimatableSceneObjectDesc::Render in
+// scenesystem.dll. The entry signature and CMeshData layout mirror current
+// public CS2 render implementations (July 2026), but every runtime access stays
+// fail-closed so a game update falls back instead of writing guessed memory.
 
-using SceneDrawObjectFn = void (__fastcall*)(void*, void*, void*, int,
+using SceneDrawObjectFn = bool (__fastcall*)(void*, void*, void*, int,
     void*, void*, void*, void*);
 using FlushInstructionCacheFn = BOOL (WINAPI*)(HANDLE, const void*, SIZE_T);
+
+static constexpr unsigned int kMeshDataStride = 0x68;
+static constexpr unsigned int kMeshSceneObjectOffset = 0x18;
+static constexpr unsigned int kMeshMaterialOffset = 0x20;
+static constexpr unsigned int kMeshMaterial2Offset = 0x28;
+static constexpr unsigned int kMeshColorOffset = 0x50;
+static constexpr int kMaxMeshBatch = 128;
+static constexpr unsigned int kDrawPatchSize = 14;
 
 struct MeshRenderBackendState {
     BYTE* drawObjectTarget;
     SceneDrawObjectFn originalDrawObject;
-    BYTE originalPrologue[12];
+    BYTE originalPrologue[kDrawPatchSize];
     bool resolved;
     bool installed;
     unsigned int drawCalls;
     unsigned int targetDraws;
     unsigned int visiblePasses;
+    unsigned int occludedPasses;
+    unsigned int stateRestores;
     unsigned int layoutRejects;
+    unsigned int materialFallbacks;
 };
 
 static MeshRenderBackendState g_meshRenderBackend{};
 
 #pragma section(".cpxtrm", read, execute)
-__declspec(allocate(".cpxtrm")) static BYTE g_drawObjectTrampoline[32] = { 0xCC };
+__declspec(allocate(".cpxtrm")) static BYTE g_drawObjectTrampoline[64] = { 0xCC };
 
 static bool FlushExecutableRange(const void* address, SIZE_T size)
 {
@@ -37,20 +46,22 @@ static bool FlushExecutableRange(const void* address, SIZE_T size)
         GetProcAddress(kernel, "FlushInstructionCache"));
     if (!flush)
         return false;
-    // -1 is the current-process pseudo handle on Windows.
     return flush(reinterpret_cast<HANDLE>(static_cast<LONG_PTR>(-1)),
         address, size) != 0;
 }
 
-static void WriteAbsoluteJump(BYTE* destination, const void* target)
+static void WriteAbsoluteIndirectJump(BYTE* destination, const void* target)
 {
-    // mov rax, imm64; jmp rax
-    destination[0] = 0x48;
-    destination[1] = 0xB8;
-    *reinterpret_cast<unsigned long long*>(destination + 2) =
+    // jmp qword ptr [rip+0]; dq target
+    // 14 bytes, clobbers no GPR and is therefore suitable for a function entry.
+    destination[0] = 0xFF;
+    destination[1] = 0x25;
+    destination[2] = 0x00;
+    destination[3] = 0x00;
+    destination[4] = 0x00;
+    destination[5] = 0x00;
+    *reinterpret_cast<unsigned long long*>(destination + 6) =
         reinterpret_cast<unsigned long long>(target);
-    destination[10] = 0xFF;
-    destination[11] = 0xE0;
 }
 
 static bool ResolveMeshRenderBackend()
@@ -62,26 +73,21 @@ static bool ResolveMeshRenderBackend()
     if (!sceneSystem)
         return false;
 
-    // The same DrawObject entry shape is used by several public CS2
-    // scene-system render implementations. FindUniquePattern rejects stale or
-    // ambiguous matches instead of guessing an offset.
+    // Canonical CAnimatableSceneObjectDesc::Render prologue used by current
+    // CS2 signature sets. The first 14 bytes are five complete instructions:
+    // mov rax,rsp; push rbx; push rdi; push r12; sub rsp,0D0h.
     static const int kDrawObjectPattern[] = {
-        0x48, 0x83, 0xEC, 0x48,
-        0x48, 0x8B, 0x84, 0x24, -1, -1, -1, -1,
-        0x48, 0x8D, 0x0D, -1, -1, -1, -1
+        0x48, 0x8B, 0xC4, 0x53, 0x57, 0x41, 0x54,
+        0x48, 0x81, 0xEC, 0xD0, 0x00, 0x00, 0x00, 0x49, 0x63
     };
-
     BYTE* target = FindUniquePattern(sceneSystem, kDrawObjectPattern,
         sizeof(kDrawObjectPattern) / sizeof(kDrawObjectPattern[0]));
     if (!target || !IsExecutable(target))
         return false;
 
-    // Exactly two complete, stack-relative instructions are overwritten.
-    // Neither instruction is RIP-relative, so both can be copied verbatim into
-    // the trampoline without a relocator.
     static const int kSafePrologue[] = {
-        0x48, 0x83, 0xEC, 0x48,
-        0x48, 0x8B, 0x84, 0x24, -1, -1, -1, -1
+        0x48, 0x8B, 0xC4, 0x53, 0x57, 0x41, 0x54,
+        0x48, 0x81, 0xEC, 0xD0, 0x00, 0x00, 0x00
     };
     if (!PatternMatchesAt(target, kSafePrologue,
         sizeof(kSafePrologue) / sizeof(kSafePrologue[0])))
@@ -92,83 +98,209 @@ static bool ResolveMeshRenderBackend()
     return true;
 }
 
-static bool MeshDrawSlots(void* meshDraw, unsigned int* ownerHandle,
-    void*** materialSlot, BYTE** colorSlot)
+static unsigned int EnemyOwnerHandleFromSceneObject(void* sceneObject)
 {
-    if (!meshDraw || !ownerHandle || !materialSlot || !colorSlot ||
-        !IsAccessible(meshDraw, 0x54, false))
-        return false;
+    if (!sceneObject || !IsAccessible(sceneObject, 0xF4, false))
+        return 0xFFFFFFFFu;
 
-    BYTE* mesh = reinterpret_cast<BYTE*>(meshDraw);
-    void** sceneObjectSlot = reinterpret_cast<void**>(mesh + 0x18);
-    if (!IsAccessible(sceneObjectSlot, sizeof(void*), false))
-        return false;
-    void* sceneObject = *sceneObjectSlot;
-    if (!IsAccessible(sceneObject, 0xBC, false))
-        return false;
+    // Scene-object subtypes have moved the owner handle between builds. Probe
+    // only the narrow set used by current public render implementations and
+    // accept a value solely when it exactly matches the frame-stage registry.
+    static const unsigned int kOwnerOffsets[] = {
+        0x98, 0xA0, 0xA8, 0xB0, 0xB8, 0xC0,
+        0xC8, 0xD0, 0xD8, 0xE0, 0xE8, 0xF0
+    };
+    BYTE* base = reinterpret_cast<BYTE*>(sceneObject);
+    for (unsigned int i = 0;
+        i < sizeof(kOwnerOffsets) / sizeof(kOwnerOffsets[0]); ++i)
+    {
+        auto* handle = reinterpret_cast<unsigned int*>(base + kOwnerOffsets[i]);
+        if (!IsAccessible(handle, sizeof(unsigned int), false))
+            continue;
+        if (IsEnemyVisualTarget(*handle))
+            return *handle;
+    }
+    return 0xFFFFFFFFu;
+}
 
-    auto* handle = reinterpret_cast<unsigned int*>(
-        reinterpret_cast<BYTE*>(sceneObject) + 0xB8);
-    auto** material = reinterpret_cast<void**>(mesh + 0x20);
-    BYTE* color = mesh + 0x50;
-    if (!IsAccessible(handle, sizeof(unsigned int), false) ||
-        !IsAccessible(material, sizeof(void*), true) ||
-        !IsAccessible(color, 4, true))
+static bool MeshBatchBelongsToEnemy(void* meshDraw, int dataCount,
+    unsigned int* ownerHandle)
+{
+    if (!meshDraw || dataCount <= 0 || dataCount > kMaxMeshBatch ||
+        !ownerHandle)
         return false;
-
-    *ownerHandle = *handle;
-    *materialSlot = material;
-    *colorSlot = color;
+    BYTE* first = reinterpret_cast<BYTE*>(meshDraw);
+    if (!IsAccessible(first, kMeshDataStride, false))
+        return false;
+    auto** sceneSlot = reinterpret_cast<void**>(first + kMeshSceneObjectOffset);
+    if (!IsAccessible(sceneSlot, sizeof(void*), false) || !*sceneSlot)
+        return false;
+    const unsigned int handle = EnemyOwnerHandleFromSceneObject(*sceneSlot);
+    if (handle == 0xFFFFFFFFu)
+        return false;
+    *ownerHandle = handle;
     return true;
 }
 
-static void __fastcall MeshDrawObjectHook(void* a1, void* a2, void* meshDraw,
+struct SavedMeshState {
+    void* material;
+    void* material2;
+    BYTE color[4];
+};
+
+static bool CaptureMeshBatch(void* meshDraw, int dataCount,
+    SavedMeshState* saved)
+{
+    if (!meshDraw || !saved || dataCount <= 0 || dataCount > kMaxMeshBatch)
+        return false;
+    BYTE* base = reinterpret_cast<BYTE*>(meshDraw);
+    for (int i = 0; i < dataCount; ++i)
+    {
+        BYTE* mesh = base + static_cast<SIZE_T>(i) * kMeshDataStride;
+        if (!IsAccessible(mesh, kMeshDataStride, true))
+            return false;
+        void** material = reinterpret_cast<void**>(mesh + kMeshMaterialOffset);
+        void** material2 = reinterpret_cast<void**>(mesh + kMeshMaterial2Offset);
+        BYTE* color = mesh + kMeshColorOffset;
+        if (!IsAccessible(material, sizeof(void*), true) ||
+            !IsAccessible(material2, sizeof(void*), true) ||
+            !IsAccessible(color, 4, true))
+            return false;
+        saved[i].material = *material;
+        saved[i].material2 = *material2;
+        saved[i].color[0] = color[0];
+        saved[i].color[1] = color[1];
+        saved[i].color[2] = color[2];
+        saved[i].color[3] = color[3];
+    }
+    return true;
+}
+
+static void ApplyMeshBatchMaterial(void* meshDraw, int dataCount,
+    void* materialValue, const RGBVal& colorValue)
+{
+    BYTE* base = reinterpret_cast<BYTE*>(meshDraw);
+    for (int i = 0; i < dataCount; ++i)
+    {
+        BYTE* mesh = base + static_cast<SIZE_T>(i) * kMeshDataStride;
+        *reinterpret_cast<void**>(mesh + kMeshMaterialOffset) = materialValue;
+        *reinterpret_cast<void**>(mesh + kMeshMaterial2Offset) = materialValue;
+        BYTE* color = mesh + kMeshColorOffset;
+        color[0] = colorValue.r;
+        color[1] = colorValue.g;
+        color[2] = colorValue.b;
+        color[3] = 255;
+    }
+}
+
+static void RestoreMeshBatch(void* meshDraw, int dataCount,
+    const SavedMeshState* saved)
+{
+    if (!meshDraw || !saved || dataCount <= 0 || dataCount > kMaxMeshBatch)
+        return;
+    BYTE* base = reinterpret_cast<BYTE*>(meshDraw);
+    for (int i = 0; i < dataCount; ++i)
+    {
+        BYTE* mesh = base + static_cast<SIZE_T>(i) * kMeshDataStride;
+        if (!IsAccessible(mesh, kMeshDataStride, true))
+            continue;
+        *reinterpret_cast<void**>(mesh + kMeshMaterialOffset) = saved[i].material;
+        *reinterpret_cast<void**>(mesh + kMeshMaterial2Offset) = saved[i].material2;
+        BYTE* color = mesh + kMeshColorOffset;
+        color[0] = saved[i].color[0];
+        color[1] = saved[i].color[1];
+        color[2] = saved[i].color[2];
+        color[3] = saved[i].color[3];
+    }
+    ++g_meshRenderBackend.stateRestores;
+}
+
+static bool __fastcall MeshDrawObjectHook(void* a1, void* a2, void* meshDraw,
     int dataCount, void* a5, void* a6, void* a7, void* a8)
 {
     SceneDrawObjectFn original = g_meshRenderBackend.originalDrawObject;
     if (!original)
-        return;
+        return false;
 
     ++g_meshRenderBackend.drawCalls;
-    if (!meshDraw || dataCount <= 0 || dataCount > 4096 ||
+    if (!meshDraw || dataCount <= 0 || dataCount > kMaxMeshBatch ||
         !g_espConfig.enable || !g_espConfig.chams ||
-        !g_espConfig.chamsEnemies ||
-        g_espConfig.chamsStyle == 2 || g_espConfig.chamsStyle == 3)
-    {
-        original(a1, a2, meshDraw, dataCount, a5, a6, a7, a8);
-        return;
-    }
+        !g_espConfig.chamsEnemies || g_espConfig.chamsStyle == 3)
+        return original(a1, a2, meshDraw, dataCount, a5, a6, a7, a8);
 
     unsigned int ownerHandle = 0xFFFFFFFFu;
-    void** materialSlot = nullptr;
-    BYTE* color = nullptr;
-    if (!MeshDrawSlots(meshDraw, &ownerHandle, &materialSlot, &color))
-    {
-        ++g_meshRenderBackend.layoutRejects;
-        original(a1, a2, meshDraw, dataCount, a5, a6, a7, a8);
-        return;
-    }
-
-    if (!IsEnemyVisualTarget(ownerHandle))
-    {
-        original(a1, a2, meshDraw, dataCount, a5, a6, a7, a8);
-        return;
-    }
+    if (!MeshBatchBelongsToEnemy(meshDraw, dataCount, &ownerHandle))
+        return original(a1, a2, meshDraw, dataCount, a5, a6, a7, a8);
 
     ++g_meshRenderBackend.targetDraws;
-    BYTE savedColor[4] = { color[0], color[1], color[2], color[3] };
-    color[0] = g_espConfig.chamsColorVisible.r;
-    color[1] = g_espConfig.chamsColorVisible.g;
-    color[2] = g_espConfig.chamsColorVisible.b;
-    color[3] = 255;
+    SavedMeshState saved[kMaxMeshBatch]{};
+    if (!CaptureMeshBatch(meshDraw, dataCount, saved))
+    {
+        ++g_meshRenderBackend.layoutRejects;
+        return original(a1, a2, meshDraw, dataCount, a5, a6, a7, a8);
+    }
 
-    ++g_meshRenderBackend.visiblePasses;
-    original(a1, a2, meshDraw, dataCount, a5, a6, a7, a8);
+    const bool wantVisible = g_espConfig.chamsStyle == 0 ||
+        g_espConfig.chamsStyle == 1;
+    const bool wantOccluded = g_espConfig.chamsStyle == 0 ||
+        g_espConfig.chamsStyle == 2;
 
-    color[0] = savedColor[0];
-    color[1] = savedColor[1];
-    color[2] = savedColor[2];
-    color[3] = savedColor[3];
+    const bool materialsReady = g_materialManager.materialsReady &&
+        g_materialManager.flatVisible && g_materialManager.flatOccluded &&
+        IsAccessible(g_materialManager.flatVisible, sizeof(void*), false) &&
+        IsAccessible(g_materialManager.flatOccluded, sizeof(void*), false);
+
+    if (!materialsReady)
+    {
+        ++g_meshRenderBackend.materialFallbacks;
+        if (wantVisible)
+        {
+            // Geometry-accurate visible fallback while MaterialManager is not
+            // ready. Occluded rendering remains owned by CGlowProperty.
+            BYTE* base = reinterpret_cast<BYTE*>(meshDraw);
+            for (int i = 0; i < dataCount; ++i)
+            {
+                BYTE* color = base + static_cast<SIZE_T>(i) *
+                    kMeshDataStride + kMeshColorOffset;
+                color[0] = g_espConfig.chamsColorVisible.r;
+                color[1] = g_espConfig.chamsColorVisible.g;
+                color[2] = g_espConfig.chamsColorVisible.b;
+                color[3] = 255;
+            }
+            ++g_meshRenderBackend.visiblePasses;
+            const bool result = original(a1, a2, meshDraw, dataCount,
+                a5, a6, a7, a8);
+            RestoreMeshBatch(meshDraw, dataCount, saved);
+            return result;
+        }
+        RestoreMeshBatch(meshDraw, dataCount, saved);
+        return original(a1, a2, meshDraw, dataCount, a5, a6, a7, a8);
+    }
+
+    bool result = false;
+    bool drew = false;
+    if (wantOccluded)
+    {
+        ApplyMeshBatchMaterial(meshDraw, dataCount,
+            g_materialManager.flatOccluded, g_espConfig.chamsColorOccluded);
+        ++g_meshRenderBackend.occludedPasses;
+        result = original(a1, a2, meshDraw, dataCount, a5, a6, a7, a8);
+        drew = true;
+    }
+
+    if (wantVisible)
+    {
+        ApplyMeshBatchMaterial(meshDraw, dataCount,
+            g_materialManager.flatVisible, g_espConfig.chamsColorVisible);
+        ++g_meshRenderBackend.visiblePasses;
+        result = original(a1, a2, meshDraw, dataCount, a5, a6, a7, a8);
+        drew = true;
+    }
+
+    RestoreMeshBatch(meshDraw, dataCount, saved);
+    if (!drew)
+        return original(a1, a2, meshDraw, dataCount, a5, a6, a7, a8);
+    return result;
 }
 
 static bool InstallMeshRenderBackend()
@@ -182,18 +314,19 @@ static bool InstallMeshRenderBackend()
     if (!target || !IsExecutable(target))
         return false;
 
-    for (unsigned int i = 0; i < sizeof(g_meshRenderBackend.originalPrologue); ++i)
+    for (unsigned int i = 0; i < kDrawPatchSize; ++i)
         g_meshRenderBackend.originalPrologue[i] = target[i];
 
     DWORD trampolineProtection = 0;
     if (!VirtualProtect(g_drawObjectTrampoline, sizeof(g_drawObjectTrampoline),
         PAGE_EXECUTE_READWRITE, &trampolineProtection))
         return false;
-    for (unsigned int i = 0; i < 12; ++i)
+    for (unsigned int i = 0; i < kDrawPatchSize; ++i)
         g_drawObjectTrampoline[i] = target[i];
-    WriteAbsoluteJump(g_drawObjectTrampoline + 12, target + 12);
+    WriteAbsoluteIndirectJump(g_drawObjectTrampoline + kDrawPatchSize,
+        target + kDrawPatchSize);
     const bool trampolineFlushed = FlushExecutableRange(
-        g_drawObjectTrampoline, 24);
+        g_drawObjectTrampoline, kDrawPatchSize * 2);
     DWORD ignored = 0;
     VirtualProtect(g_drawObjectTrampoline, sizeof(g_drawObjectTrampoline),
         trampolineProtection, &ignored);
@@ -204,25 +337,26 @@ static bool InstallMeshRenderBackend()
         reinterpret_cast<SceneDrawObjectFn>(g_drawObjectTrampoline);
 
     DWORD targetProtection = 0;
-    if (!VirtualProtect(target, 12, PAGE_EXECUTE_READWRITE,
+    if (!VirtualProtect(target, kDrawPatchSize, PAGE_EXECUTE_READWRITE,
         &targetProtection))
     {
         g_meshRenderBackend.originalDrawObject = nullptr;
         return false;
     }
-    WriteAbsoluteJump(target, reinterpret_cast<const void*>(&MeshDrawObjectHook));
-    const bool targetFlushed = FlushExecutableRange(target, 12);
-    VirtualProtect(target, 12, targetProtection, &ignored);
+    WriteAbsoluteIndirectJump(target,
+        reinterpret_cast<const void*>(&MeshDrawObjectHook));
+    const bool targetFlushed = FlushExecutableRange(target, kDrawPatchSize);
+    VirtualProtect(target, kDrawPatchSize, targetProtection, &ignored);
     if (!targetFlushed)
     {
         DWORD restoreProtection = 0;
-        if (VirtualProtect(target, 12, PAGE_EXECUTE_READWRITE,
+        if (VirtualProtect(target, kDrawPatchSize, PAGE_EXECUTE_READWRITE,
             &restoreProtection))
         {
-            for (unsigned int i = 0; i < 12; ++i)
+            for (unsigned int i = 0; i < kDrawPatchSize; ++i)
                 target[i] = g_meshRenderBackend.originalPrologue[i];
-            FlushExecutableRange(target, 12);
-            VirtualProtect(target, 12, restoreProtection, &ignored);
+            FlushExecutableRange(target, kDrawPatchSize);
+            VirtualProtect(target, kDrawPatchSize, restoreProtection, &ignored);
         }
         g_meshRenderBackend.originalDrawObject = nullptr;
         return false;
@@ -244,13 +378,14 @@ static void RemoveMeshRenderBackend()
 
     BYTE* target = g_meshRenderBackend.drawObjectTarget;
     DWORD protection = 0;
-    if (VirtualProtect(target, 12, PAGE_EXECUTE_READWRITE, &protection))
+    if (VirtualProtect(target, kDrawPatchSize, PAGE_EXECUTE_READWRITE,
+        &protection))
     {
-        for (unsigned int i = 0; i < 12; ++i)
+        for (unsigned int i = 0; i < kDrawPatchSize; ++i)
             target[i] = g_meshRenderBackend.originalPrologue[i];
-        FlushExecutableRange(target, 12);
+        FlushExecutableRange(target, kDrawPatchSize);
         DWORD ignored = 0;
-        VirtualProtect(target, 12, protection, &ignored);
+        VirtualProtect(target, kDrawPatchSize, protection, &ignored);
     }
     g_meshRenderBackend.originalDrawObject = nullptr;
     g_meshRenderBackend.installed = false;
