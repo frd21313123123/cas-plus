@@ -71,6 +71,33 @@ if (-not $source.Contains($oldTeamFallback)) {
 }
 $source = $source.Replace($oldTeamFallback, $newTeamFallback)
 
+# The old bot-control bookkeeping no longer participates in target selection.
+# Keeping it made the player renderer look bot-specific and performed needless
+# schema reads every refresh.
+$oldBotBookkeeping = @'
+    unsigned int humanControlledPawns[kControllerSlotLimit];
+    ZeroBytes(humanControlledPawns, sizeof(humanControlledPawns));
+    int humanControlledPawnCount = 0;
+    for (int i = 0; i < controllerCount; ++i)
+    {
+        BYTE* base = reinterpret_cast<BYTE*>(controllers[i]);
+        BYTE* controllingBot = base +
+            g_botHighlightRuntime.controllingBotOffset;
+        unsigned int* pawnHandle = reinterpret_cast<unsigned int*>(
+            base + g_botHighlightRuntime.playerPawnHandleOffset);
+        if (IsAccessible(controllingBot, 1, false) &&
+            IsAccessible(pawnHandle, sizeof(unsigned int), false) &&
+            !IsBotController(g_botHighlightRuntime, base) &&
+            *controllingBot != 0)
+            humanControlledPawns[humanControlledPawnCount++] = *pawnHandle;
+    }
+
+'@
+if (-not $source.Contains($oldBotBookkeeping)) {
+    throw 'Stale bot bookkeeping anchor was not found. Refusing to patch blindly.'
+}
+$source = $source.Replace($oldBotBookkeeping, '')
+
 # ESPConfig defaults must become active immediately after the bridge is ready;
 # previously Chams could appear enabled in the UI while the backend stayed off
 # until the user clicked a visual setting.
@@ -86,7 +113,7 @@ $startupReplacement = @'
     if (!InstallFrameStageBridge())
     {
         SetSkyboxStatus(L"Sky: failed to install the frame-stage bridge.");
-        SetBotStatus(L"Bots: failed to install the frame-stage bridge.");
+        SetBotStatus(L"Visuals: failed to install the frame-stage bridge.");
     }
     else
     {
