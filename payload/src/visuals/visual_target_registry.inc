@@ -61,14 +61,15 @@ static bool IsEnemyVisualTargetBeingBuilt(unsigned int handle)
 
 static void PublishVisualTargets()
 {
-    // Publication is tiny (at most 64 dwords). If a render callback owns the
-    // snapshot at this instant, keep the previous complete generation instead
-    // of exposing an incomplete list.
     if (!TryLockVisualTargets())
         return;
     g_visualTargets.enemyCount = g_visualTargetBuildCount;
+    // Volatile element-wise publication preserves the no-CRT payload contract;
+    // /O2 must not lower this bounded copy into an external memcpy call.
+    volatile unsigned int* destination = g_visualTargets.enemyHandles;
+    volatile unsigned int* source = g_visualTargetBuild;
     for (int i = 0; i < g_visualTargetBuildCount; ++i)
-        g_visualTargets.enemyHandles[i] = g_visualTargetBuild[i];
+        destination[i] = source[i];
     ++g_visualTargets.generation;
     UnlockVisualTargets();
 }
