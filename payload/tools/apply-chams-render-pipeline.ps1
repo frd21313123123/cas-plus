@@ -9,6 +9,28 @@ param(
 $ErrorActionPreference = 'Stop'
 
 $source = Get-Content -LiteralPath $InputPath -Raw -Encoding UTF8
+$sourceDirectory = Split-Path -Parent $InputPath
+$pipelinePath = Join-Path $sourceDirectory 'visuals\chams_render_pipeline.inc'
+$targetRegistryPath = Join-Path $sourceDirectory 'visuals\visual_target_registry.inc'
+$targetCollectorPath = Join-Path $sourceDirectory 'visuals\visual_target_collector.inc'
+$materialManagerPath = Join-Path $sourceDirectory 'visuals\material_manager.inc'
+$targetUiPath = Join-Path $sourceDirectory 'visuals\chams_target_ui.inc'
+$materialUiPath = Join-Path $sourceDirectory 'visuals\chams_material_ui.inc'
+$meshBackendPath = Join-Path $sourceDirectory 'visuals\mesh_render_probe.inc'
+$diagnosticsPath = Join-Path $sourceDirectory 'visuals\visual_diagnostics.inc'
+foreach ($requiredPath in @($pipelinePath, $targetRegistryPath, $targetCollectorPath, $materialManagerPath, $targetUiPath, $materialUiPath, $meshBackendPath, $diagnosticsPath)) {
+    if (-not (Test-Path -LiteralPath $requiredPath)) {
+        throw "Visual renderer module was not found: $requiredPath"
+    }
+}
+$newPipeline = Get-Content -LiteralPath $pipelinePath -Raw -Encoding UTF8
+$targetRegistry = Get-Content -LiteralPath $targetRegistryPath -Raw -Encoding UTF8
+$targetCollector = Get-Content -LiteralPath $targetCollectorPath -Raw -Encoding UTF8
+$materialManager = Get-Content -LiteralPath $materialManagerPath -Raw -Encoding UTF8
+$targetUi = Get-Content -LiteralPath $targetUiPath -Raw -Encoding UTF8
+$materialUi = Get-Content -LiteralPath $materialUiPath -Raw -Encoding UTF8
+$meshBackend = Get-Content -LiteralPath $meshBackendPath -Raw -Encoding UTF8
+$diagnostics = Get-Content -LiteralPath $diagnosticsPath -Raw -Encoding UTF8
 
 $oldConfig = @'
     bool chams = true;
@@ -16,23 +38,151 @@ $oldConfig = @'
     RGBVal chamsColorVisible = { 132, 204, 22 };  // normal depth-tested model pass
     int chamsStyle = 0; // 0: Dual Pass, 1: Visible Only, 2: Through Wall Only, 3: Glow Pass
 '@
-
 $newConfig = @'
     bool chams = true;
-    // Visible material pass stays depth-tested and therefore follows the model
-    // geometry only where the scene depth buffer allows it to be seen.
+    // The scene-system renderer owns mesh passes whenever its guarded
+    // DrawObject trampoline and runtime MaterialManager are available.
     RGBVal chamsColorVisible = { 132, 204, 22 };
-    // Occluded pass uses Source 2's screen-highlight path so the same entity can
-    // be represented through scene occluders without guessing a visibility byte.
     RGBVal chamsColorOccluded = { 239, 68, 68 };
-    // 0: Visible + Occluded, 1: Visible Only, 2: Occluded Only, 3: Glow Only.
+    // 0: Visible + Occluded, 1: Visible Only, 2: Occluded Only,
+    // 3: legacy Glow Only compatibility mode.
     int chamsStyle = 0;
 '@
-
 if (-not $source.Contains($oldConfig)) {
     throw 'Chams config anchor was not found. The payload source changed; refusing to patch blindly.'
 }
 $source = $source.Replace($oldConfig, $newConfig)
+
+$targetConfigAnchor = @'
+    bool chamsEnemies = true;
+    bool chamsHands = false; // intentionally unavailable until a schema-backed viewmodel handle exists
+    bool chamsWeapons = false;
+'@
+$targetConfigReplacement = @'
+    bool chamsEnemies = true;
+    bool chamsAllies = false;
+    bool chamsLocal = false;
+    bool chamsHands = false;
+    bool chamsWeapons = false;
+    bool chamsDroppedWeapons = false;
+    bool chamsGrenades = false;
+    bool chamsBomb = false;
+'@
+if (-not $source.Contains($targetConfigAnchor)) { throw 'Chams target config anchor was not found. Refusing to patch blindly.' }
+$source = $source.Replace($targetConfigAnchor, $targetConfigReplacement)
+
+$runtimeStructAnchor = @'
+    unsigned int healthOffset;
+    unsigned int lifeStateOffset;
+    unsigned int localControllerOffset;
+    unsigned int steamIdOffset;
+    unsigned int playerPawnHandleOffset;
+    unsigned int pawnAliveOffset;
+    unsigned int controllingBotOffset;
+    unsigned int botDifficultyOffset;
+    unsigned int weaponServicesOffset;
+    unsigned int activeWeaponOffset;
+    unsigned int glowOffset;
+'@
+$runtimeStructReplacement = @'
+    unsigned int healthOffset;
+    unsigned int lifeStateOffset;
+    unsigned int ownerEntityOffset;
+    unsigned int localControllerOffset;
+    unsigned int steamIdOffset;
+    unsigned int playerPawnHandleOffset;
+    unsigned int pawnAliveOffset;
+    unsigned int controllingBotOffset;
+    unsigned int botDifficultyOffset;
+    unsigned int weaponServicesOffset;
+    unsigned int activeWeaponOffset;
+    unsigned int hudModelArmsOffset;
+    unsigned int glowOffset;
+'@
+if (-not $source.Contains($runtimeStructAnchor)) { throw 'Visual runtime struct anchor was not found. Refusing to patch blindly.' }
+$source = $source.Replace($runtimeStructAnchor, $runtimeStructReplacement)
+
+$schemaClassAnchor = @'
+    SchemaClassInfoView* basePlayerPawn = FindSchemaClass(scope,
+        "C_BasePlayerPawn");
+    SchemaClassInfoView* weaponServices = FindSchemaClass(scope,
+        "CPlayer_WeaponServices");
+    SchemaClassInfoView* baseModelEntity = FindSchemaClass(scope,
+        "C_BaseModelEntity");
+    SchemaClassInfoView* glowProperty = FindSchemaClass(scope,
+        "CGlowProperty");
+    if (!baseEntity || !baseController || !playerController ||
+        !basePlayerPawn || !weaponServices || !baseModelEntity || !glowProperty)
+        return false;
+'@
+$schemaClassReplacement = @'
+    SchemaClassInfoView* basePlayerPawn = FindSchemaClass(scope,
+        "C_BasePlayerPawn");
+    SchemaClassInfoView* csPlayerPawn = FindSchemaClass(scope,
+        "C_CSPlayerPawn");
+    SchemaClassInfoView* weaponServices = FindSchemaClass(scope,
+        "CPlayer_WeaponServices");
+    SchemaClassInfoView* baseModelEntity = FindSchemaClass(scope,
+        "C_BaseModelEntity");
+    SchemaClassInfoView* glowProperty = FindSchemaClass(scope,
+        "CGlowProperty");
+    if (!baseEntity || !baseController || !playerController ||
+        !basePlayerPawn || !csPlayerPawn || !weaponServices ||
+        !baseModelEntity || !glowProperty)
+        return false;
+'@
+if (-not $source.Contains($schemaClassAnchor)) { throw 'Visual schema class anchor was not found. Refusing to patch blindly.' }
+$source = $source.Replace($schemaClassAnchor, $schemaClassReplacement)
+
+$ownerFieldAnchor = @'
+        !FindSchemaField(baseEntity, "m_iHealth", &runtime->healthOffset) ||
+        !FindSchemaField(baseEntity, "m_lifeState", &runtime->lifeStateOffset) ||
+        !FindSchemaField(baseController, "m_bIsLocalPlayerController",
+'@
+$ownerFieldReplacement = @'
+        !FindSchemaField(baseEntity, "m_iHealth", &runtime->healthOffset) ||
+        !FindSchemaField(baseEntity, "m_lifeState", &runtime->lifeStateOffset) ||
+        !FindSchemaField(baseEntity, "m_hOwnerEntity", &runtime->ownerEntityOffset) ||
+        !FindSchemaField(baseController, "m_bIsLocalPlayerController",
+'@
+if (-not $source.Contains($ownerFieldAnchor)) { throw 'Owner-handle schema anchor was not found. Refusing to patch blindly.' }
+$source = $source.Replace($ownerFieldAnchor, $ownerFieldReplacement)
+
+$armsFieldAnchor = @'
+        !FindSchemaField(weaponServices, "m_hActiveWeapon",
+            &runtime->activeWeaponOffset) ||
+        !FindSchemaField(baseModelEntity, "m_Glow", &runtime->glowOffset) ||
+'@
+$armsFieldReplacement = @'
+        !FindSchemaField(weaponServices, "m_hActiveWeapon",
+            &runtime->activeWeaponOffset) ||
+        !FindSchemaField(csPlayerPawn, "m_hHudModelArms",
+            &runtime->hudModelArmsOffset) ||
+        !FindSchemaField(baseModelEntity, "m_Glow", &runtime->glowOffset) ||
+'@
+if (-not $source.Contains($armsFieldAnchor)) { throw 'HUD arms schema anchor was not found. Refusing to patch blindly.' }
+$source = $source.Replace($armsFieldAnchor, $armsFieldReplacement)
+
+$runtimeBoundsAnchor = @'
+        runtime->weaponServicesOffset + sizeof(void*) >
+            static_cast<unsigned int>(basePlayerPawn->size) ||
+        runtime->activeWeaponOffset + sizeof(unsigned int) >
+            static_cast<unsigned int>(weaponServices->size) ||
+        runtime->glowOffset + runtime->glowingOffset >=
+'@
+$runtimeBoundsReplacement = @'
+        runtime->ownerEntityOffset + sizeof(unsigned int) >
+            static_cast<unsigned int>(baseEntity->size) ||
+        runtime->weaponServicesOffset + sizeof(void*) >
+            static_cast<unsigned int>(basePlayerPawn->size) ||
+        runtime->activeWeaponOffset + sizeof(unsigned int) >
+            static_cast<unsigned int>(weaponServices->size) ||
+        runtime->hudModelArmsOffset + sizeof(unsigned int) >
+            static_cast<unsigned int>(csPlayerPawn->size) ||
+        runtime->glowOffset + runtime->glowingOffset >=
+'@
+if (-not $source.Contains($runtimeBoundsAnchor)) { throw 'Visual runtime bounds anchor was not found. Refusing to patch blindly.' }
+$source = $source.Replace($runtimeBoundsAnchor, $runtimeBoundsReplacement)
 
 $startAnchor = 'static bool ApplyModelPasses(const BotHighlightRuntime& runtime,'
 $endAnchor = 'static bool ApplyBotHighlight(const BotHighlightRuntime& runtime,'
@@ -41,175 +191,317 @@ $end = $source.IndexOf($endAnchor)
 if ($start -lt 0 -or $end -le $start) {
     throw 'ApplyModelPasses anchors were not found. The payload source changed; refusing to patch blindly.'
 }
+$generatedVisualBackend = $targetRegistry + "`r`n" + $targetCollector + "`r`n" +
+    $materialManager + "`r`n" + $targetUi + "`r`n" + $materialUi + "`r`n" +
+    $meshBackend + "`r`n" + $diagnostics + "`r`n" + $newPipeline + "`r`n"
+$source = $source.Substring(0, $start) + $generatedVisualBackend + $source.Substring($end)
 
-$newPipeline = @'
-struct ChamsPassPlan {
-    bool visibleMaterial;
-    bool occludedHighlight;
-    bool glowHighlight;
-};
-
-static ChamsPassPlan BuildChamsPassPlan(bool allowVisiblePass,
-    bool allowOccludedPass)
+# Discovery can start early, but expensive/one-shot render backend resolution
+# happens only after the entity/schema/local lifecycle is fully validated.
+$updateStartAnchor = @'
+static int UpdateBotHighlights(BotHighlightStats* stats)
 {
-    ChamsPassPlan plan{};
-    if (!g_espConfig.enable)
-        return plan;
+    if (stats)
+'@
+$updateStartReplacement = @'
+static int UpdateBotHighlights(BotHighlightStats* stats)
+{
+    BeginVisualTargetUpdate();
+    if (stats)
+'@
+if (-not $source.Contains($updateStartAnchor)) { throw 'Visual-target update anchor was not found. Refusing to patch blindly.' }
+$source = $source.Replace($updateStartAnchor, $updateStartReplacement)
 
-    if (g_espConfig.chams)
+$runtimeAnchor = @'
+    if (!g_preResolvedEntityRuntimeReady)
+        return BOT_HIGHLIGHT_ERR_RUNTIME;
+'@
+$runtimeReplacement = @'
+    if (!g_preResolvedEntityRuntimeReady)
     {
-        if (g_espConfig.chamsStyle == 0) // Visible + Occluded
-        {
-            plan.visibleMaterial = allowVisiblePass;
-            plan.occludedHighlight = allowOccludedPass;
-        }
-        else if (g_espConfig.chamsStyle == 1) // Visible Only
-        {
-            plan.visibleMaterial = allowVisiblePass;
-        }
-        else if (g_espConfig.chamsStyle == 2) // Occluded Only
-        {
-            plan.occludedHighlight = allowOccludedPass;
-        }
-        else if (g_espConfig.chamsStyle == 3) // Glow Only
-        {
-            plan.glowHighlight = allowOccludedPass;
-        }
+        ResetVisualTargets();
+        return BOT_HIGHLIGHT_ERR_RUNTIME;
     }
+'@
+if (-not $source.Contains($runtimeAnchor)) { throw 'Entity-runtime failure anchor was not found. Refusing to patch blindly.' }
+$source = $source.Replace($runtimeAnchor, $runtimeReplacement)
 
-    // The standalone ESP Glow toggle is independent from Chams. It can be
-    // combined with the visible material pass, but never steals the occluded
-    // Chams color when the dual-pass mode is active.
-    if (g_espConfig.glow && allowOccludedPass)
-        plan.glowHighlight = true;
+$schemaAnchor = @'
+        if (!clientModule ||
+            !ResolveBotHighlightRuntime(clientModule, &resolved))
+            return BOT_HIGHLIGHT_ERR_SCHEMA;
+'@
+$schemaReplacement = @'
+        if (!clientModule ||
+            !ResolveBotHighlightRuntime(clientModule, &resolved))
+        {
+            ResetVisualTargets();
+            return BOT_HIGHLIGHT_ERR_SCHEMA;
+        }
+'@
+if (-not $source.Contains($schemaAnchor)) { throw 'Schema failure anchor was not found. Refusing to patch blindly.' }
+$source = $source.Replace($schemaAnchor, $schemaReplacement)
 
-    return plan;
-}
-
-static void RestoreVisibleMaterialPass(const BotHighlightRuntime& runtime,
-    void* modelEntity, const OriginalBotHighlight& original,
-    BYTE* renderColor, BYTE* clientTint, BYTE* useClientTint)
-{
-    CopyFourBytes(clientTint, original.clientTint);
-    *useClientTint = original.useClientTint;
-    CopyFourBytes(renderColor, original.renderColor);
-    runtime.setRenderColor(modelEntity, original.renderColor[0],
-        original.renderColor[1], original.renderColor[2]);
-}
-
-static void ApplyVisibleMaterialPass(const BotHighlightRuntime& runtime,
-    void* modelEntity, BYTE* renderColor, BYTE* clientTint,
-    BYTE* useClientTint)
-{
-    const BYTE visible[4] = {
-        g_espConfig.chamsColorVisible.r,
-        g_espConfig.chamsColorVisible.g,
-        g_espConfig.chamsColorVisible.b,
-        255
-    };
-    CopyFourBytes(renderColor, visible);
-    CopyFourBytes(clientTint, visible);
-    *useClientTint = 1;
-    runtime.setRenderColor(modelEntity, visible[0], visible[1], visible[2]);
-}
-
-static void RestoreHighlightPass(const BotHighlightRuntime& runtime,
-    BYTE* glowBase, const OriginalBotHighlight& original, BYTE* glowColor,
-    BYTE* eligible, BYTE* glowing)
-{
-    runtime.setGlowType(glowBase, original.glowType, 0.0f);
-    CopyFourBytes(glowBase + runtime.glowTimeOffset, original.glowTime);
-    CopyFourBytes(glowBase + runtime.glowStartTimeOffset,
-        original.glowStartTime);
-    runtime.setGlowColor(glowBase, PackRgba(original.glowColor));
-    CopyFourBytes(glowColor, original.glowColor);
-    *eligible = original.eligible;
-    *glowing = original.glowing;
-}
-
-static void ApplyHighlightPass(const BotHighlightRuntime& runtime,
-    BYTE* glowBase, const RGBVal& color, BYTE* eligible, BYTE* glowing)
-{
-    const BYTE rgba[4] = { color.r, color.g, color.b, 255 };
-    runtime.setGlowColor(glowBase, PackRgba(rgba));
-    *eligible = 1;
-    // Source 2 type 3 is the screen-highlight path that survives scene
-    // occlusion. It is deliberately separate from the depth-tested model tint.
-    runtime.setGlowType(glowBase, 3, 0.0f);
-    *glowing = 1;
-}
-
-static bool ApplyModelPasses(const BotHighlightRuntime& runtime,
-    unsigned int entityHandle, void* modelEntity, bool allowVisiblePass,
-    bool allowOccludedPass)
-{
-    if (!RememberBotHighlight(runtime, entityHandle, modelEntity))
-        return false;
-
-    BYTE* glowColor = nullptr;
-    BYTE* eligible = nullptr;
-    BYTE* glowing = nullptr;
-    BYTE* renderColor = nullptr;
-    BYTE* clientTint = nullptr;
-    BYTE* useClientTint = nullptr;
-    if (!HighlightSlots(runtime, modelEntity, &glowColor, &eligible, &glowing,
-        &renderColor, &clientTint, &useClientTint))
-        return false;
-
-    OriginalBotHighlight* original = FindOriginalBotHighlight(entityHandle);
-    if (!original)
-        return false;
-    original->seen = true;
-
-    const ChamsPassPlan plan = BuildChamsPassPlan(allowVisiblePass,
-        allowOccludedPass);
-
-    if (plan.visibleMaterial)
-        ApplyVisibleMaterialPass(runtime, modelEntity, renderColor, clientTint,
-            useClientTint);
-    else
-        RestoreVisibleMaterialPass(runtime, modelEntity, *original, renderColor,
-            clientTint, useClientTint);
-
-    BYTE* glowBase = reinterpret_cast<BYTE*>(modelEntity) + runtime.glowOffset;
-    if (plan.occludedHighlight)
+$mapAnchor = @'
+    void* entitySystem = CurrentEntitySystem(g_botHighlightRuntime.entity);
+    if (!entitySystem)
+        return BOT_HIGHLIGHT_WAITING_MAP;
+'@
+$mapReplacement = @'
+    void* entitySystem = CurrentEntitySystem(g_botHighlightRuntime.entity);
+    if (!entitySystem)
     {
-        // Chams owns the occluded pass color. This is intentionally evaluated
-        // before Glow so toggling Glow cannot cause red/green color flicker.
-        ApplyHighlightPass(runtime, glowBase, g_espConfig.chamsColorOccluded,
-            eligible, glowing);
+        ResetVisualTargets();
+        return BOT_HIGHLIGHT_WAITING_MAP;
     }
-    else if (plan.glowHighlight)
-    {
-        ApplyHighlightPass(runtime, glowBase, g_espConfig.glowColor,
-            eligible, glowing);
-    }
-    else
-    {
-        RestoreHighlightPass(runtime, glowBase, *original, glowColor,
-            eligible, glowing);
-    }
+'@
+if (-not $source.Contains($mapAnchor)) { throw 'Map wait anchor was not found. Refusing to patch blindly.' }
+$source = $source.Replace($mapAnchor, $mapReplacement)
 
-    return plan.visibleMaterial || plan.occludedHighlight ||
-        plan.glowHighlight;
-}
+$targetApplyAnchor = @'
+        if (stats)
+            ++stats->botCandidates;
+        if (ApplyBotHighlight(g_botHighlightRuntime, *pawnHandle, pawn) &&
+            stats)
+            ++stats->highlighted;
+'@
+$targetApplyReplacement = @'
+        if (stats)
+            ++stats->botCandidates;
+        AddEnemyVisualTarget(*pawnHandle);
+        if (ApplyBotHighlight(g_botHighlightRuntime, *pawnHandle, pawn) &&
+            stats)
+            ++stats->highlighted;
+'@
+if (-not $source.Contains($targetApplyAnchor)) { throw 'Enemy visual-target publication anchor was not found. Refusing to patch blindly.' }
+$source = $source.Replace($targetApplyAnchor, $targetApplyReplacement)
+
+$publishAnchor = @'
+    ApplyActiveWeaponChams(g_botHighlightRuntime, entitySystem, localPawn);
+
+    int destination = 0;
+'@
+$publishReplacement = @'
+    CollectSupplementalVisualTargets(g_botHighlightRuntime, entitySystem,
+        controllers, controllerCount, localController, localPawn, localTeam);
+    ApplyActiveWeaponChams(g_botHighlightRuntime, entitySystem, localPawn);
+    PublishVisualTargets();
+
+    int destination = 0;
+'@
+if (-not $source.Contains($publishAnchor)) { throw 'Visual-target publish anchor was not found. Refusing to patch blindly.' }
+$source = $source.Replace($publishAnchor, $publishReplacement)
+
+$oldTeamFallback = @'
+    if (localTeam < 2 || localTeam > 3)
+    {
+        localTeam = 3; // Fallback CT team so T enemies (team 2) are highlighted
+    }
+'@
+$newTeamFallback = @'
+    if (localTeam < 2 || localTeam > 3)
+    {
+        ResetVisualTargets();
+        RestoreAllBotHighlights(stats);
+        return BOT_HIGHLIGHT_WAITING_LOCAL;
+    }
+'@
+if (-not $source.Contains($oldTeamFallback)) { throw 'Local-team fallback anchor was not found. Refusing to patch blindly.' }
+$source = $source.Replace($oldTeamFallback, $newTeamFallback)
+
+$localIdentityAnchor = @'
+    if (!localIdentity || localHandle == 0xFFFFFFFFu)
+    {
+        RestoreAllBotHighlights(stats);
+        return BOT_HIGHLIGHT_WAITING_LOCAL;
+    }
+'@
+$localIdentityReplacement = @'
+    if (!localIdentity || localHandle == 0xFFFFFFFFu)
+    {
+        ResetVisualTargets();
+        RestoreAllBotHighlights(stats);
+        return BOT_HIGHLIGHT_WAITING_LOCAL;
+    }
+'@
+if (-not $source.Contains($localIdentityAnchor)) { throw 'Local identity wait anchor was not found. Refusing to patch blindly.' }
+$source = $source.Replace($localIdentityAnchor, $localIdentityReplacement)
+
+$backendReadyAnchor = @'
+    g_lastLocalController = localController;
+    g_lastLocalControllerIdentity = localIdentity;
+    g_lastLocalControllerHandle = localHandle;
+'@
+$backendReadyReplacement = @'
+    g_lastLocalController = localController;
+    g_lastLocalControllerIdentity = localIdentity;
+    g_lastLocalControllerHandle = localHandle;
+
+    // At this point Schema, entity system, local team and full local controller
+    // identity are all valid. Only now consume one-shot renderer resolution.
+    InstallMeshRenderBackend();
+    EnsureMaterialManagerReady();
+'@
+if (-not $source.Contains($backendReadyAnchor)) { throw 'Renderer runtime-ready anchor was not found. Refusing to patch blindly.' }
+$source = $source.Replace($backendReadyAnchor, $backendReadyReplacement)
+
+$oldBotBookkeeping = @'
+    unsigned int humanControlledPawns[kControllerSlotLimit];
+    ZeroBytes(humanControlledPawns, sizeof(humanControlledPawns));
+    int humanControlledPawnCount = 0;
+    for (int i = 0; i < controllerCount; ++i)
+    {
+        BYTE* base = reinterpret_cast<BYTE*>(controllers[i]);
+        BYTE* controllingBot = base +
+            g_botHighlightRuntime.controllingBotOffset;
+        unsigned int* pawnHandle = reinterpret_cast<unsigned int*>(
+            base + g_botHighlightRuntime.playerPawnHandleOffset);
+        if (IsAccessible(controllingBot, 1, false) &&
+            IsAccessible(pawnHandle, sizeof(unsigned int), false) &&
+            !IsBotController(g_botHighlightRuntime, base) &&
+            *controllingBot != 0)
+            humanControlledPawns[humanControlledPawnCount++] = *pawnHandle;
+    }
 
 '@
+if (-not $source.Contains($oldBotBookkeeping)) { throw 'Stale bot bookkeeping anchor was not found. Refusing to patch blindly.' }
+$source = $source.Replace($oldBotBookkeeping, '')
 
-$source = $source.Substring(0, $start) + $newPipeline + $source.Substring($end)
+$modalSizeAnchor = 'DrawRoundedCard(hdc, 220, 110, 340, 270, RGB_COLOR(28, 28, 34), RGB_COLOR(60, 60, 70), 8);'
+$modalSizeReplacement = 'DrawRoundedCard(hdc, 220, 110, 400, 270, RGB_COLOR(28, 28, 34), RGB_COLOR(60, 60, 70), 8);'
+if (-not $source.Contains($modalSizeAnchor)) { throw 'Chams modal size anchor was not found. Refusing to patch blindly.' }
+$source = $source.Replace($modalSizeAnchor, $modalSizeReplacement)
+
+$targetDrawAnchor = @'
+    SetTextColor(hdc, RGB_COLOR(228, 228, 231));
+    RECT lblRc = { 390, 150, 540, 170 };
+    DrawTextW(hdc, L"Chams Targets:", -1, &lblRc, DT_LEFT | DT_SINGLELINE);
+
+    DrawToggleSwitch(hdc, 390, 175, cfg.chamsEnemies);
+    RECT eRc = { 435, 175, 540, 195 };
+    DrawTextW(hdc, L"Enemy Pawns", -1, &eRc, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+
+    DrawToggleSwitch(hdc, 390, 205, false);
+    RECT hRc = { 435, 205, 550, 225 };
+    SetTextColor(hdc, RGB_COLOR(113, 113, 122));
+    DrawTextW(hdc, L"Hands (schema N/A)", -1, &hRc, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    SetTextColor(hdc, RGB_COLOR(228, 228, 231));
+
+    DrawToggleSwitch(hdc, 390, 235, cfg.chamsWeapons);
+    RECT wRc = { 435, 235, 540, 255 };
+    DrawTextW(hdc, L"Weapons", -1, &wRc, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+
+    DrawRoundedCard(hdc, 235, 335, 310, 32, RGB_COLOR(39, 39, 45), RGB_COLOR(60, 60, 70), 6);
+'@
+$targetDrawReplacement = @'
+    DrawChamsTargetControls(hdc, cfg);
+    DrawChamsMaterialPresetControls(hdc);
+
+    DrawRoundedCard(hdc, 235, 335, 365, 32, RGB_COLOR(39, 39, 45), RGB_COLOR(60, 60, 70), 6);
+'@
+if (-not $source.Contains($targetDrawAnchor)) { throw 'Chams final target UI draw anchor was not found. Refusing to patch blindly.' }
+$source = $source.Replace($targetDrawAnchor, $targetDrawReplacement)
+$source = $source.Replace('RECT btnRc = { 235, 335, 545, 367 };', 'RECT btnRc = { 235, 335, 600, 367 };')
+
+$targetClickAnchor = @'
+            if (mouseX >= 385 && mouseX <= 430)
+            {
+                if (mouseY >= 175 && mouseY <= 195) { g_espConfig.chamsEnemies = !g_espConfig.chamsEnemies; QueueBotHighlight(g_espConfig.enable && (g_espConfig.chams || g_espConfig.glow)); InvalidateRect(wnd, nullptr, FALSE); return 0; }
+                if (mouseY >= 205 && mouseY <= 225) { return 0; }
+                if (mouseY >= 235 && mouseY <= 255) { g_espConfig.chamsWeapons = !g_espConfig.chamsWeapons; QueueBotHighlight(g_espConfig.enable && (g_espConfig.chams || g_espConfig.glow)); InvalidateRect(wnd, nullptr, FALSE); return 0; }
+            }
+            if ((mouseX >= 235 && mouseX <= 545 && mouseY >= 335 && mouseY <= 367) ||
+                mouseX < 220 || mouseX > 560 || mouseY < 110 || mouseY > 380)
+'@
+$targetClickReplacement = @'
+            if (HandleChamsTargetClick(mouseX, mouseY))
+            {
+                InvalidateRect(wnd, nullptr, FALSE);
+                return 0;
+            }
+            if (HandleChamsMaterialPresetClick(mouseX, mouseY))
+            {
+                InvalidateRect(wnd, nullptr, FALSE);
+                return 0;
+            }
+            if ((mouseX >= 235 && mouseX <= 600 && mouseY >= 335 && mouseY <= 367) ||
+                mouseX < 220 || mouseX > 620 || mouseY < 110 || mouseY > 380)
+'@
+if (-not $source.Contains($targetClickAnchor)) { throw 'Chams final target UI click anchor was not found. Refusing to patch blindly.' }
+$source = $source.Replace($targetClickAnchor, $targetClickReplacement)
+
+$statusAnchor = @'
+    SetBotStatus(status.text);
+}
+
+static void DrawRoundedCard(HDC hdc, int x, int y, int w, int h, COLORREF bg, COLORREF border, int radius)
+'@
+$statusReplacement = @'
+    AppendVisualRendererDiagnostics(&status);
+    SetBotStatus(status.text);
+}
+
+static void DrawRoundedCard(HDC hdc, int x, int y, int w, int h, COLORREF bg, COLORREF border, int radius)
+'@
+if (-not $source.Contains($statusAnchor)) { throw 'Visual diagnostics status anchor was not found. Refusing to patch blindly.' }
+$source = $source.Replace($statusAnchor, $statusReplacement)
+
+$startupAnchor = @'
+    if (!InstallFrameStageBridge())
+    {
+        SetSkyboxStatus(L"Sky: failed to install the frame-stage bridge.");
+        SetBotStatus(L"Bots: failed to install the frame-stage bridge.");
+    }
+    PositionMenuOverGame();
+'@
+$startupReplacement = @'
+    if (!InstallFrameStageBridge())
+    {
+        SetSkyboxStatus(L"Sky: failed to install the frame-stage bridge.");
+        SetBotStatus(L"Visuals: failed to install the frame-stage bridge.");
+    }
+    else
+    {
+        const bool modelEffects = g_espConfig.enable &&
+            (g_espConfig.chams || g_espConfig.glow);
+        g_botHighlightEnabled = modelEffects;
+        QueueBotHighlight(modelEffects);
+    }
+    PositionMenuOverGame();
+'@
+if (-not $source.Contains($startupAnchor)) { throw 'Frame-stage startup anchor was not found. Refusing to patch blindly.' }
+$source = $source.Replace($startupAnchor, $startupReplacement)
+
+$shutdownAnchor = @'
+    RemoveFrameStageBridge();
+    return 0;
+'@
+$shutdownReplacement = @'
+    if (g_botHighlightRuntimeReady && g_originalBotHighlightCount > 0)
+        RestoreAllBotHighlights(nullptr);
+    const bool meshRemoved = RemoveMeshRenderBackend();
+    if (meshRemoved)
+    {
+        ResetMaterialManagerState();
+        ResetVisualTargets();
+        g_meshRenderBackend.drawObjectTarget = nullptr;
+        g_meshRenderBackend.resolved = false;
+    }
+    RemoveFrameStageBridge();
+    return 0;
+'@
+if (-not $source.Contains($shutdownAnchor)) { throw 'Payload shutdown anchor was not found. Refusing to patch blindly.' }
+$source = $source.Replace($shutdownAnchor, $shutdownReplacement)
 
 $source = $source.Replace(
     'const wchar_t* styles[] = { L"Dual Pass", L"Visible Only", L"Through Wall", L"Glow Pass" };',
     'const wchar_t* styles[] = { L"Visible + Occluded", L"Visible Only", L"Occluded Only", L"Glow Only" };')
-
 $source = $source.Replace(
     'L"Chams: model + through-wall passes active"',
-    'L"Chams: visible material + occluded highlight active"')
+    'L"Chams: scene mesh backend + compatibility fallback"')
+$source = $source.Replace('AppendStatusText(&status, L", bots ");', 'AppendStatusText(&status, L", targets ");')
 
 $outputDirectory = Split-Path -Parent $OutputPath
-if ($outputDirectory) {
-    New-Item -ItemType Directory -Path $outputDirectory -Force | Out-Null
-}
-
+if ($outputDirectory) { New-Item -ItemType Directory -Path $outputDirectory -Force | Out-Null }
 Set-Content -LiteralPath $OutputPath -Value $source -Encoding UTF8 -NoNewline
-Write-Host "Generated Chams render-pipeline source: $OutputPath"
+Write-Host "Generated modular visual render-pipeline source: $OutputPath"
