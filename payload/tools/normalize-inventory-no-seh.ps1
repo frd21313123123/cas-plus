@@ -34,12 +34,8 @@ Write-Host "Normalized extended inventory guards for no-CRT payload: $InputPath"
 $localOps = Join-Path $PSScriptRoot 'apply-inventory-local-ops.ps1'
 $econLifecycle = Join-Path $PSScriptRoot 'normalize-inventory-econ-lifecycle.ps1'
 
+# These are PowerShell scripts, not native processes. With ErrorActionPreference
+# set to Stop any child throw terminates this stage; $LASTEXITCODE is deliberately
+# not consulted because successful .ps1 invocation does not define it.
 & $localOps -InputPath $InputPath -OutputPath $InputPath
-if ($LASTEXITCODE -ne 0) {
-    throw "Local inventory operations stage failed with exit code $LASTEXITCODE."
-}
-
 & $econLifecycle -InputPath $InputPath
-if ($LASTEXITCODE -ne 0) {
-    throw "Inventory econ lifecycle normalization failed with exit code $LASTEXITCODE."
-}
