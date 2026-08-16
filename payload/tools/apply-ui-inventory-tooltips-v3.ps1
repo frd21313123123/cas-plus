@@ -86,5 +86,23 @@ $stickerReplacement = @'
 '@
 Replace-Required $stickerTail $stickerReplacement.TrimEnd() 'Sticker Editor tooltip registration'
 
+# apply-ui-redesign changes the menu creation size to 980x620. The original
+# PositionMenuOverGame helper still has a separate 780x500 pair used only for
+# centering calculations; fix that remaining exact pair so the larger menu is
+# actually centered over the CS2 client instead of shifted down/right.
+$positionAnchor = @'
+    constexpr int kWidth = 780;
+    constexpr int kHeight = 500;
+    const int width = static_cast<int>(client.right - client.left);
+    const int height = static_cast<int>(client.bottom - client.top);
+'@
+$positionReplacement = @'
+    constexpr int kWidth = 980;
+    constexpr int kHeight = 620;
+    const int width = static_cast<int>(client.right - client.left);
+    const int height = static_cast<int>(client.bottom - client.top);
+'@
+Replace-Required $positionAnchor $positionReplacement.TrimEnd() '980x620 menu centering dimensions'
+
 Set-Content -LiteralPath $InputPath -Value $source -Encoding UTF8
-Write-Host "Applied Inventory/Sticker V3 contextual tooltips: $InputPath"
+Write-Host "Applied Inventory/Sticker V3 tooltips and corrected menu centering: $InputPath"
