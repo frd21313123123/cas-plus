@@ -57,7 +57,9 @@
       <DataExecutionPrevention>true</DataExecutionPrevention>
     </Link>
     <PreBuildEvent>
-      <Command>powershell -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)tools\apply-chams-render-pipeline.ps1" -InputPath "$(ProjectDir)src\dllmain.cpp" -OutputPath "$(ProjectDir)$(IntDir)dllmain.chams.cpp"
+      <Command>powershell -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)tools\normalize-visual-entity-lifecycle.ps1" -InputPath "$(ProjectDir)src\dllmain.cpp"
+if errorlevel 1 exit /b %errorlevel%
+powershell -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)tools\apply-chams-render-pipeline.ps1" -InputPath "$(ProjectDir)src\dllmain.cpp" -OutputPath "$(ProjectDir)$(IntDir)dllmain.chams.cpp"
 if errorlevel 1 exit /b %errorlevel%
 powershell -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)tools\normalize-inventory-injection-points.ps1" -InputPath "$(ProjectDir)$(IntDir)dllmain.chams.cpp"
 if errorlevel 1 exit /b %errorlevel%
@@ -107,7 +109,9 @@ if errorlevel 1 exit /b %errorlevel%</Command>
       <DataExecutionPrevention>true</DataExecutionPrevention>
     </Link>
     <PreBuildEvent>
-      <Command>powershell -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)tools\apply-chams-render-pipeline.ps1" -InputPath "$(ProjectDir)src\dllmain.cpp" -OutputPath "$(ProjectDir)$(IntDir)dllmain.chams.cpp"
+      <Command>powershell -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)tools\normalize-visual-entity-lifecycle.ps1" -InputPath "$(ProjectDir)src\dllmain.cpp"
+if errorlevel 1 exit /b %errorlevel%
+powershell -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)tools\apply-chams-render-pipeline.ps1" -InputPath "$(ProjectDir)src\dllmain.cpp" -OutputPath "$(ProjectDir)$(IntDir)dllmain.chams.cpp"
 if errorlevel 1 exit /b %errorlevel%
 powershell -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)tools\normalize-inventory-injection-points.ps1" -InputPath "$(ProjectDir)$(IntDir)dllmain.chams.cpp"
 if errorlevel 1 exit /b %errorlevel%
