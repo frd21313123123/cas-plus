@@ -20,18 +20,20 @@ if ($count -ne 1) {
 # names and preserve the target-control block until its full replacement anchor.
 $rendererPatcher = Join-Path $PSScriptRoot 'apply-chams-render-pipeline.ps1'
 $patcherSource = Get-Content -LiteralPath $rendererPatcher -Raw -Encoding UTF8
+$conflictingLine = 'if ($source.Contains($oldTargetToggle)) { $source = $source.Replace($oldTargetToggle, '''') }'
+$collectorNeedle = @'
+    CollectExtendedVisualTargets(g_botHighlightRuntime, entitySystem,
+        localController, localPawn, localHandle, localTeam);
+'@
+$collectorReplacement = @'
+    CollectSupplementalVisualTargets(g_botHighlightRuntime, entitySystem,
+        controllers, controllerCount, localController, localPawn, localTeam);
+'@
 $replacements = @(
-    @(
-        'if ($source.Contains($oldTargetToggle)) { $source = $source.Replace($oldTargetToggle, '''') }',
-        '# Compatibility normalizer: preserve target controls for the full replacement anchor below.'
-    ),
+    @($conflictingLine,
+        '# Compatibility normalizer: preserve target controls for the full replacement anchor below.'),
     @('EnsureSelectedChamsMaterialsReady();', 'EnsureMaterialManagerReady();'),
-    @(
-@'    CollectExtendedVisualTargets(g_botHighlightRuntime, entitySystem,
-        localController, localPawn, localHandle, localTeam);'@,
-@'    CollectSupplementalVisualTargets(g_botHighlightRuntime, entitySystem,
-        controllers, controllerCount, localController, localPawn, localTeam);'@
-    )
+    @($collectorNeedle, $collectorReplacement)
 )
 foreach ($pair in $replacements) {
     $needle = [string]$pair[0]
@@ -53,7 +55,7 @@ $hotNeedle = '    return VisualTargetKindEnabled(kind) ? kind : VISUAL_TARGET_NO
 $hotReplacement = @'
     return (kind > VISUAL_TARGET_NONE && kind <= VISUAL_TARGET_BOMB) ?
         kind : VISUAL_TARGET_NONE;
-'@.TrimEnd()
+'@
 $hotCount = ([regex]::Matches($hotPathSource, [regex]::Escape($hotNeedle))).Count
 if ($hotCount -ne 1) {
     throw "Visual hot-path compatibility anchor expected exactly once, found $hotCount."
