@@ -40,11 +40,12 @@
     <ClCompile>
       <WarningLevel>Level3</WarningLevel>
       <SDLCheck>true</SDLCheck>
-      <PreprocessorDefinitions>_WINDOWS;_USRDLL;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>EXCEPTION_EXECUTE_HANDLER=1;_WINDOWS;_USRDLL;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <ExceptionHandling>false</ExceptionHandling>
       <RuntimeTypeInfo>false</RuntimeTypeInfo>
       <BufferSecurityCheck>false</BufferSecurityCheck>
+      <AdditionalOptions>/Gs65536 %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
@@ -56,7 +57,28 @@
       <DataExecutionPrevention>true</DataExecutionPrevention>
     </Link>
     <PreBuildEvent>
-      <Command>powershell -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)tools\apply-chams-render-pipeline.ps1" -InputPath "$(ProjectDir)src\dllmain.cpp" -OutputPath "$(ProjectDir)$(IntDir)dllmain.chams.cpp"</Command>
+      <Command>powershell -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)tools\apply-chams-render-pipeline.ps1" -InputPath "$(ProjectDir)src\dllmain.cpp" -OutputPath "$(ProjectDir)$(IntDir)dllmain.chams.cpp"
+if errorlevel 1 exit /b %errorlevel%
+powershell -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)tools\normalize-inventory-injection-points.ps1" -InputPath "$(ProjectDir)$(IntDir)dllmain.chams.cpp"
+if errorlevel 1 exit /b %errorlevel%
+powershell -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)tools\apply-inventory-changer.ps1" -InputPath "$(ProjectDir)$(IntDir)dllmain.chams.cpp" -OutputPath "$(ProjectDir)$(IntDir)dllmain.chams.cpp"
+if errorlevel 1 exit /b %errorlevel%
+powershell -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)tools\apply-inventory-catalog.ps1" -InputPath "$(ProjectDir)$(IntDir)dllmain.chams.cpp" -OutputPath "$(ProjectDir)$(IntDir)dllmain.chams.cpp"
+if errorlevel 1 exit /b %errorlevel%
+powershell -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)tools\apply-inventory-operations.ps1" -InputPath "$(ProjectDir)$(IntDir)dllmain.chams.cpp" -OutputPath "$(ProjectDir)$(IntDir)dllmain.chams.cpp"
+if errorlevel 1 exit /b %errorlevel%
+powershell -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)tools\apply-inventory-visual-refresh.ps1" -InputPath "$(ProjectDir)$(IntDir)dllmain.chams.cpp" -OutputPath "$(ProjectDir)$(IntDir)dllmain.chams.cpp"
+if errorlevel 1 exit /b %errorlevel%
+powershell -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)tools\apply-inventory-gloves.ps1" -InputPath "$(ProjectDir)$(IntDir)dllmain.chams.cpp" -OutputPath "$(ProjectDir)$(IntDir)dllmain.chams.cpp"
+if errorlevel 1 exit /b %errorlevel%
+powershell -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)tools\apply-inventory-weapon-factory.ps1" -InputPath "$(ProjectDir)$(IntDir)dllmain.chams.cpp" -OutputPath "$(ProjectDir)$(IntDir)dllmain.chams.cpp"
+if errorlevel 1 exit /b %errorlevel%
+powershell -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)tools\apply-inventory-music.ps1" -InputPath "$(ProjectDir)$(IntDir)dllmain.chams.cpp" -OutputPath "$(ProjectDir)$(IntDir)dllmain.chams.cpp"
+if errorlevel 1 exit /b %errorlevel%
+powershell -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)tools\apply-inventory-full.ps1" -InputPath "$(ProjectDir)$(IntDir)dllmain.chams.cpp" -OutputPath "$(ProjectDir)$(IntDir)dllmain.chams.cpp"
+if errorlevel 1 exit /b %errorlevel%
+powershell -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)tools\normalize-inventory-no-seh.ps1" -InputPath "$(ProjectDir)$(IntDir)dllmain.chams.cpp"
+if errorlevel 1 exit /b %errorlevel%</Command>
     </PreBuildEvent>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
@@ -65,12 +87,13 @@
       <FunctionLevelLinking>true</FunctionLevelLinking>
       <IntrinsicFunctions>true</IntrinsicFunctions>
       <SDLCheck>true</SDLCheck>
-      <PreprocessorDefinitions>NDEBUG;_WINDOWS;_USRDLL;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>EXCEPTION_EXECUTE_HANDLER=1;NDEBUG;_WINDOWS;_USRDLL;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <ConformanceMode>true</ConformanceMode>
       <ExceptionHandling>false</ExceptionHandling>
       <RuntimeTypeInfo>false</RuntimeTypeInfo>
       <BufferSecurityCheck>false</BufferSecurityCheck>
       <Optimization>MaxSpeed</Optimization>
+      <AdditionalOptions>/Gs65536 %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
     <Link>
       <SubSystem>Windows</SubSystem>
@@ -84,7 +107,28 @@
       <DataExecutionPrevention>true</DataExecutionPrevention>
     </Link>
     <PreBuildEvent>
-      <Command>powershell -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)tools\apply-chams-render-pipeline.ps1" -InputPath "$(ProjectDir)src\dllmain.cpp" -OutputPath "$(ProjectDir)$(IntDir)dllmain.chams.cpp"</Command>
+      <Command>powershell -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)tools\apply-chams-render-pipeline.ps1" -InputPath "$(ProjectDir)src\dllmain.cpp" -OutputPath "$(ProjectDir)$(IntDir)dllmain.chams.cpp"
+if errorlevel 1 exit /b %errorlevel%
+powershell -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)tools\normalize-inventory-injection-points.ps1" -InputPath "$(ProjectDir)$(IntDir)dllmain.chams.cpp"
+if errorlevel 1 exit /b %errorlevel%
+powershell -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)tools\apply-inventory-changer.ps1" -InputPath "$(ProjectDir)$(IntDir)dllmain.chams.cpp" -OutputPath "$(ProjectDir)$(IntDir)dllmain.chams.cpp"
+if errorlevel 1 exit /b %errorlevel%
+powershell -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)tools\apply-inventory-catalog.ps1" -InputPath "$(ProjectDir)$(IntDir)dllmain.chams.cpp" -OutputPath "$(ProjectDir)$(IntDir)dllmain.chams.cpp"
+if errorlevel 1 exit /b %errorlevel%
+powershell -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)tools\apply-inventory-operations.ps1" -InputPath "$(ProjectDir)$(IntDir)dllmain.chams.cpp" -OutputPath "$(ProjectDir)$(IntDir)dllmain.chams.cpp"
+if errorlevel 1 exit /b %errorlevel%
+powershell -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)tools\apply-inventory-visual-refresh.ps1" -InputPath "$(ProjectDir)$(IntDir)dllmain.chams.cpp" -OutputPath "$(ProjectDir)$(IntDir)dllmain.chams.cpp"
+if errorlevel 1 exit /b %errorlevel%
+powershell -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)tools\apply-inventory-gloves.ps1" -InputPath "$(ProjectDir)$(IntDir)dllmain.chams.cpp" -OutputPath "$(ProjectDir)$(IntDir)dllmain.chams.cpp"
+if errorlevel 1 exit /b %errorlevel%
+powershell -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)tools\apply-inventory-weapon-factory.ps1" -InputPath "$(ProjectDir)$(IntDir)dllmain.chams.cpp" -OutputPath "$(ProjectDir)$(IntDir)dllmain.chams.cpp"
+if errorlevel 1 exit /b %errorlevel%
+powershell -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)tools\apply-inventory-music.ps1" -InputPath "$(ProjectDir)$(IntDir)dllmain.chams.cpp" -OutputPath "$(ProjectDir)$(IntDir)dllmain.chams.cpp"
+if errorlevel 1 exit /b %errorlevel%
+powershell -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)tools\apply-inventory-full.ps1" -InputPath "$(ProjectDir)$(IntDir)dllmain.chams.cpp" -OutputPath "$(ProjectDir)$(IntDir)dllmain.chams.cpp"
+if errorlevel 1 exit /b %errorlevel%
+powershell -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)tools\normalize-inventory-no-seh.ps1" -InputPath "$(ProjectDir)$(IntDir)dllmain.chams.cpp"
+if errorlevel 1 exit /b %errorlevel%</Command>
     </PreBuildEvent>
   </ItemDefinitionGroup>
   <ItemGroup>
