@@ -10,21 +10,19 @@ $ErrorActionPreference = 'Stop'
 
 $source = Get-Content -LiteralPath $InputPath -Raw -Encoding UTF8
 
-$replacements = @(
-    @(
-        '"-dx11 -insecure -allow_third_party_software -novid -nojoy\\n"',
-        '"-dx11 -allow_third_party_software -novid -nojoy\\n"'
-    ),
-    @(
-        'std::wstring launchArgs = L"-dx11 -insecure -allow_third_party_software -novid -nojoy";',
-        'std::wstring launchArgs = L"-dx11 -allow_third_party_software -novid -nojoy";'
-    ),
-    @(
-@'
+$defaultFlags = '-dx11 -insecure -allow_third_party_software -novid -nojoy'
+$secureFlags = '-dx11 -allow_third_party_software -novid -nojoy'
+$defaultCount = ([regex]::Matches($source, [regex]::Escape($defaultFlags))).Count
+if ($defaultCount -ne 2) {
+    throw "Secure-loader default flag anchor mismatch (expected 2 matches, got $defaultCount)."
+}
+$source = $source.Replace($defaultFlags, $secureFlags)
+
+$oldArgBlock = @'
             std::string argStr = argv[i];
             launchArgs += std::wstring(argStr.begin(), argStr.end()) + L" ";
-'@,
-@'
+'@
+$newArgBlock = @'
             std::string argStr = argv[i];
             std::wstring wideArg(argStr.begin(), argStr.end());
             // Never allow the loader to launch CS2 with -insecure, even when
@@ -33,29 +31,25 @@ $replacements = @(
                 continue;
             launchArgs += wideArg + L" ";
 '@
-    ),
-    @(
-        '"  [*] Launching Counter-Strike 2 with flags (-dx11 -insecure ...)\\n"',
-        '"  [*] Launching Counter-Strike 2 without -insecure (-dx11 ...)\\n"'
-    )
-)
-
-foreach ($pair in $replacements) {
-    $old = $pair[0]
-    $new = $pair[1]
-    $count = ([regex]::Matches($source, [regex]::Escape($old))).Count
-    if ($count -ne 1) {
-        throw "Secure-loader anchor mismatch (expected exactly one match, got $count): $old"
-    }
-    $source = $source.Replace($old, $new)
+$argCount = ([regex]::Matches($source, [regex]::Escape($oldArgBlock))).Count
+if ($argCount -ne 1) {
+    throw "Secure-loader custom-argument anchor mismatch (expected 1 match, got $argCount)."
 }
+$source = $source.Replace($oldArgBlock, $newArgBlock)
+
+$oldLaunchStatus = 'with flags (-dx11 -insecure ...)'
+$newLaunchStatus = 'without -insecure (-dx11 ...)'
+$statusCount = ([regex]::Matches($source, [regex]::Escape($oldLaunchStatus))).Count
+if ($statusCount -ne 1) {
+    throw "Secure-loader status anchor mismatch (expected 1 match, got $statusCount)."
+}
+$source = $source.Replace($oldLaunchStatus, $newLaunchStatus)
 
 # The generated translation unit is the source of truth for the binary. Refuse
 # to build if a future edit reintroduces the launch flag anywhere outside the
-# intentional command-line filter/comment added above.
+# explicit command-line filter and the informational status text.
 $unsafe = $source -replace 'L"-insecure"', 'L"<filtered>"'
 $unsafe = $unsafe -replace 'without -insecure', 'without <filtered>'
-$unsafe = $unsafe -replace 'with -insecure', 'with <filtered>'
 $unsafe = $unsafe -replace 'Never allow the loader to launch CS2 with -insecure', 'Never allow the loader to launch CS2 with <filtered>'
 if ($unsafe.Contains('-insecure')) {
     throw 'Generated loader source still contains an unfiltered -insecure launch flag.'
