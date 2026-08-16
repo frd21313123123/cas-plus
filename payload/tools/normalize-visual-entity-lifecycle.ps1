@@ -19,4 +19,21 @@ if ($count -ne 1) {
     throw "Visual entity lifecycle guard expected exactly one current block, found $count. Refusing to continue blindly."
 }
 
-Write-Host "Validated current Visuals entity-system lifecycle: $InputPath"
+# The legacy renderer generator contains an old compatibility removal that
+# deletes the exact target-control substring later required by its own full UI
+# replacement anchor. Normalize that one build-tool line in the checkout before
+# invoking the generator. Keep this exact and fail closed so it cannot become a
+# broad/self-modifying rewrite after future generator edits.
+$rendererPatcher = Join-Path $PSScriptRoot 'apply-chams-render-pipeline.ps1'
+$patcherSource = Get-Content -LiteralPath $rendererPatcher -Raw -Encoding UTF8
+$conflictingLine = 'if ($source.Contains($oldTargetToggle)) { $source = $source.Replace($oldTargetToggle, '''') }'
+$conflictCount = ([regex]::Matches($patcherSource,
+    [regex]::Escape($conflictingLine))).Count
+if ($conflictCount -ne 1) {
+    throw "Visual renderer patch-order compatibility line expected exactly once, found $conflictCount. Refusing to continue blindly."
+}
+$patcherSource = $patcherSource.Replace($conflictingLine,
+    '# Compatibility normalizer: preserve target controls for the full replacement anchor below.')
+Set-Content -LiteralPath $rendererPatcher -Value $patcherSource -Encoding UTF8 -NoNewline
+
+Write-Host "Validated current Visuals lifecycle and normalized renderer patch order: $InputPath"
