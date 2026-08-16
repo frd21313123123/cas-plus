@@ -18,9 +18,13 @@ The native detail screen is implemented in `payload/src/ui/ui_inventory_editor_v
 
 It calls the existing InventoryStore mutation helpers. No second inventory state model is introduced.
 
+## Sticker editor
+
+`payload/src/ui/ui_inventory_sticker_v2.inc` replaces the active legacy sticker overlay with the same V2 visual system. It owns slot selection, sticker ID, scrape/remove, rotation, scale, anchor, X/Y offsets and stack movement. Modal pointer input is routed before sidebar and page hit-testing, so controls underneath the overlay cannot fire accidentally.
+
 ## Input ownership
 
-When the Inventory tab is active, redesigned Inventory screens consume their own clicks. Unknown detail-screen clicks are intentionally consumed rather than translated into coordinates of the old hidden editor. This prevents invisible legacy controls from firing underneath the redesigned UI.
+When the Inventory tab is active, redesigned Inventory screens consume their own clicks. Unknown detail-screen clicks are intentionally consumed rather than translated into coordinates of the old hidden editor. This prevents invisible legacy controls from firing underneath the redesigned UI. Modal input has even higher priority than the page.
 
 ## Live skin status
 
