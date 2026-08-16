@@ -29,13 +29,15 @@ Set-Content -LiteralPath $InputPath -Value $source -Encoding UTF8
 Write-Host "Normalized extended inventory guards for no-CRT payload: $InputPath"
 
 # Keep the vcxproj pipeline stable: final local-only inventory layers are
-# chained from this already-terminal stage. Both children use exact anchors and
+# chained from this already-terminal stage. Children use exact anchors and
 # fail closed if a preceding patch changes their expected source shape.
 $localOps = Join-Path $PSScriptRoot 'apply-inventory-local-ops.ps1'
 $econLifecycle = Join-Path $PSScriptRoot 'normalize-inventory-econ-lifecycle.ps1'
+$runtimeDiagnostics = Join-Path $PSScriptRoot 'apply-inventory-runtime-diagnostics.ps1'
 
 # These are PowerShell scripts, not native processes. With ErrorActionPreference
 # set to Stop any child throw terminates this stage; $LASTEXITCODE is deliberately
 # not consulted because successful .ps1 invocation does not define it.
 & $localOps -InputPath $InputPath -OutputPath $InputPath
 & $econLifecycle -InputPath $InputPath
+& $runtimeDiagnostics -InputPath $InputPath
