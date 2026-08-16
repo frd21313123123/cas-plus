@@ -37,6 +37,7 @@ $runtimeDiagnostics = Join-Path $PSScriptRoot 'apply-inventory-runtime-diagnosti
 $nativeEcon = Join-Path $PSScriptRoot 'fix-inventory-econ-native.ps1'
 $viewFallback = Join-Path $PSScriptRoot 'fix-inventory-econ-view-fallback.ps1'
 $uiRedesign = Join-Path $PSScriptRoot 'apply-ui-redesign.ps1'
+$uiStickerV2 = Join-Path $PSScriptRoot 'apply-ui-sticker-v2.ps1'
 
 # These are PowerShell scripts, not native processes. With ErrorActionPreference
 # set to Stop any child throw terminates this stage; $LASTEXITCODE is deliberately
@@ -47,3 +48,4 @@ $uiRedesign = Join-Path $PSScriptRoot 'apply-ui-redesign.ps1'
 & $nativeEcon -InputPath $InputPath
 & $viewFallback -InputPath $InputPath
 & $uiRedesign -InputPath $InputPath
+& $uiStickerV2 -InputPath $InputPath
