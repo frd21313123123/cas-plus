@@ -39,6 +39,7 @@ $viewFallback = Join-Path $PSScriptRoot 'fix-inventory-econ-view-fallback.ps1'
 $uiRedesign = Join-Path $PSScriptRoot 'apply-ui-redesign.ps1'
 $uiStickerV2 = Join-Path $PSScriptRoot 'apply-ui-sticker-v2.ps1'
 $uiInteractionVisualsV2 = Join-Path $PSScriptRoot 'apply-ui-interaction-visuals-v2.ps1'
+$uiInventoryTooltipsV3 = Join-Path $PSScriptRoot 'apply-ui-inventory-tooltips-v3.ps1'
 
 # These are PowerShell scripts, not native processes. With ErrorActionPreference
 # set to Stop any child throw terminates this stage; $LASTEXITCODE is deliberately
@@ -51,3 +52,4 @@ $uiInteractionVisualsV2 = Join-Path $PSScriptRoot 'apply-ui-interaction-visuals-
 & $uiRedesign -InputPath $InputPath
 & $uiStickerV2 -InputPath $InputPath
 & $uiInteractionVisualsV2 -InputPath $InputPath
+& $uiInventoryTooltipsV3 -InputPath $InputPath
