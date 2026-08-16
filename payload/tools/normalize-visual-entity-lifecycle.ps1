@@ -28,7 +28,7 @@ $normalizedCount = ([regex]::Matches($source, [regex]::Escape($normalized))).Cou
 if ($currentCount -eq 1 -and $normalizedCount -eq 0) {
     $source = $source.Replace($current, $normalized)
 }
-elif ($currentCount -eq 0 -and $normalizedCount -eq 1) {
+elseif ($currentCount -eq 0 -and $normalizedCount -eq 1) {
     # Already normalized by a future source cleanup; keep it idempotent.
 }
 else {
