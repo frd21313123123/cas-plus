@@ -135,41 +135,10 @@ if (-not $source.Contains($installAnchor)) {
 }
 $source = $source.Replace($installAnchor, $installReplacement)
 
-# No extra shutdown patch is needed here. ShutdownInventoryChanger already
-# restores all game-facing econ state before RemoveFrameStageBridge(); refresh
-# records are payload-owned static memory and disappear when the DLL unloads.
-# Avoid coupling this optional backend to the visual teardown layout.
-
-# Add compact diagnostics to the Inventory panel without changing the base
-# runtime struct or worker synchronization.
-$diagAnchor = @'
-    DrawTextW(hdc, L"Local virtual inventory only - Steam/GC state is untouched.",
-        -1, &note, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-'@
-$diagReplacement = @'
-    DrawTextW(hdc, L"Local virtual inventory only - Steam/GC state is untouched.",
-        -1, &note, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-
-    SetTextColor(hdc, RGB_COLOR(113, 113, 122));
-    RECT refreshDiag = { 570, 444, 735, 463 };
-    if (g_inventoryVisualRefreshRuntime.skinReady &&
-        g_inventoryVisualRefreshRuntime.subclassReady)
-        DrawTextW(hdc, L"refresh: skin + subclass", -1, &refreshDiag,
-            DT_RIGHT | DT_SINGLELINE);
-    else if (g_inventoryVisualRefreshRuntime.skinReady)
-        DrawTextW(hdc, L"refresh: skin only", -1, &refreshDiag,
-            DT_RIGHT | DT_SINGLELINE);
-    else if (g_inventoryVisualRefreshRuntime.subclassReady)
-        DrawTextW(hdc, L"refresh: subclass only", -1, &refreshDiag,
-            DT_RIGHT | DT_SINGLELINE);
-    else
-        DrawTextW(hdc, L"refresh: fallback only", -1, &refreshDiag,
-            DT_RIGHT | DT_SINGLELINE);
-'@
-if (-not $source.Contains($diagAnchor)) {
-    throw 'Inventory visual-refresh diagnostics anchor was not found. Refusing to patch blindly.'
-}
-$source = $source.Replace($diagAnchor, $diagReplacement)
+# No extra shutdown/UI patch is needed here. ShutdownInventoryChanger restores
+# game-facing state, while the refresh cache is payload-owned static memory.
+# Keeping this backend independent from visual teardown and panel layout means a
+# cosmetic UI rearrangement cannot make the DLL fail to build.
 
 Set-Content -LiteralPath $OutputPath -Value $source -Encoding UTF8
 Write-Host "Injected guarded inventory visual refresh backend: $OutputPath"
