@@ -27,3 +27,19 @@ if ($source.Contains('__try') -or $source.Contains('__except')) {
 
 Set-Content -LiteralPath $InputPath -Value $source -Encoding UTF8
 Write-Host "Normalized extended inventory guards for no-CRT payload: $InputPath"
+
+# Keep the vcxproj pipeline stable: final local-only inventory layers are
+# chained from this already-terminal stage. Both children use exact anchors and
+# fail closed if a preceding patch changes their expected source shape.
+$localOps = Join-Path $PSScriptRoot 'apply-inventory-local-ops.ps1'
+$econLifecycle = Join-Path $PSScriptRoot 'normalize-inventory-econ-lifecycle.ps1'
+
+& $localOps -InputPath $InputPath -OutputPath $InputPath
+if ($LASTEXITCODE -ne 0) {
+    throw "Local inventory operations stage failed with exit code $LASTEXITCODE."
+}
+
+& $econLifecycle -InputPath $InputPath
+if ($LASTEXITCODE -ne 0) {
+    throw "Inventory econ lifecycle normalization failed with exit code $LASTEXITCODE."
+}
