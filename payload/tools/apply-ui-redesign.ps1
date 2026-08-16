@@ -31,19 +31,18 @@ $menuIndex = $source.IndexOf($menuAnchor)
 $source = $source.Substring(0, $menuIndex) + $module + "`r`n`r`n" +
     $source.Substring($menuIndex)
 
-# Give the redesigned shell enough room for a real sidebar + 4-column content
-# grid. The window is still positioned over the CS2 client by the existing
-# PositionMenuOverGame logic.
+# Scope the resize to the actual menu window. The generated payload also owns a
+# second 780x500 surface, so matching just the two constants is intentionally
+# rejected as ambiguous.
 Replace-Required @'
     constexpr int kWidth = 780;
     constexpr int kHeight = 500;
+    HWND wnd = CreateWindowExW(WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE, kClassName, L"CAS v2.3 - ESP Settings & Interactive Preview",
 '@ @'
     constexpr int kWidth = 980;
     constexpr int kHeight = 620;
-'@ 'window dimensions'
-
-Replace-Required 'L"CAS v2.3 - ESP Settings & Interactive Preview"' `
-    'L"cas+  |  control center"' 'window title'
+    HWND wnd = CreateWindowExW(WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE, kClassName, L"cas+  |  control center",
+'@ 'menu window dimensions/title'
 
 Replace-Required @'
         HBRUSH bgBrush = CreateSolidBrush(RGB_COLOR(22, 22, 24));
