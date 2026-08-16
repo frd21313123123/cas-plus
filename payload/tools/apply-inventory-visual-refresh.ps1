@@ -135,19 +135,10 @@ if (-not $source.Contains($installAnchor)) {
 }
 $source = $source.Replace($installAnchor, $installReplacement)
 
-$shutdownAnchor = @'
-    ShutdownInventoryChanger();
-    if (g_botHighlightRuntimeReady && g_originalBotHighlightCount > 0)
-'@
-$shutdownReplacement = @'
-    ShutdownInventoryChanger();
-    ResetInventoryVisualRefresh();
-    if (g_botHighlightRuntimeReady && g_originalBotHighlightCount > 0)
-'@
-if (-not $source.Contains($shutdownAnchor)) {
-    throw 'Inventory visual-refresh shutdown anchor was not found. Refusing to patch blindly.'
-}
-$source = $source.Replace($shutdownAnchor, $shutdownReplacement)
+# No extra shutdown patch is needed here. ShutdownInventoryChanger already
+# restores all game-facing econ state before RemoveFrameStageBridge(); refresh
+# records are payload-owned static memory and disappear when the DLL unloads.
+# Avoid coupling this optional backend to the visual teardown layout.
 
 # Add compact diagnostics to the Inventory panel without changing the base
 # runtime struct or worker synchronization.
