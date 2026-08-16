@@ -23,80 +23,6 @@ if ($hookIndex -lt 0) {
 $source = $source.Substring(0, $hookIndex) + $module + "`r`n`r`n" +
     $source.Substring($hookIndex)
 
-# Keep the two optional refresh capabilities independent. A game update can
-# invalidate one signature while leaving the other valid; the generated code
-# should retain whichever exact/unique backend still resolves.
-$runtimeGateAnchor = @'
-    if (!g_inventoryVisualRefreshRuntime.resolved ||
-        !g_inventoryVisualRefreshRuntime.skinReady ||
-        !g_inventoryRuntime.ready || !g_preResolvedEntityRuntimeReady ||
-        g_originalWeaponCosmeticsCount <= 0)
-'@
-$runtimeGateReplacement = @'
-    if (!g_inventoryVisualRefreshRuntime.resolved ||
-        (!g_inventoryVisualRefreshRuntime.skinReady &&
-         !g_inventoryVisualRefreshRuntime.subclassReady) ||
-        !g_inventoryRuntime.ready || !g_preResolvedEntityRuntimeReady ||
-        g_originalWeaponCosmeticsCount <= 0)
-'@
-if (-not $source.Contains($runtimeGateAnchor)) {
-    throw 'Inventory visual-refresh runtime gate anchor was not found. Refusing to patch blindly.'
-}
-$source = $source.Replace($runtimeGateAnchor, $runtimeGateReplacement)
-
-$skinCallAnchor = @'
-        if (record->refreshBudget > 0 && record->refreshCooldown == 0)
-        {
-            g_inventoryVisualRefreshRuntime.updateSkin(entity, true);
-            ++g_inventoryVisualRefreshCalls;
-            --record->refreshBudget;
-            // ~40 frame-stage passes between material re-kicks. This keeps the
-            // composite builder progressing instead of restarting each frame.
-            record->refreshCooldown = 40;
-        }
-'@
-$skinCallReplacement = @'
-        if (g_inventoryVisualRefreshRuntime.skinReady &&
-            record->refreshBudget > 0 && record->refreshCooldown == 0)
-        {
-            g_inventoryVisualRefreshRuntime.updateSkin(entity, true);
-            ++g_inventoryVisualRefreshCalls;
-            --record->refreshBudget;
-            // ~40 frame-stage passes between material re-kicks. This keeps the
-            // composite builder progressing instead of restarting each frame.
-            record->refreshCooldown = 40;
-        }
-'@
-if (-not $source.Contains($skinCallAnchor)) {
-    throw 'Inventory visual-refresh skin-call anchor was not found. Refusing to patch blindly.'
-}
-$source = $source.Replace($skinCallAnchor, $skinCallReplacement)
-
-# On first observation the projected definition has already been written. Kick
-# UpdateSubclass once for a newly tracked, catalog-confirmed weapon so knife
-# definition swaps get a chance to rebuild their subclass/model state.
-$newRecordAnchor = @'
-        record->refreshBudget = 3;
-        record->refreshCooldown = 0;
-        record->seen = true;
-        return record;
-'@
-$newRecordReplacement = @'
-        record->refreshBudget = 3;
-        record->refreshCooldown = 0;
-        record->seen = true;
-        if (g_inventoryVisualRefreshRuntime.subclassReady)
-        {
-            g_inventoryVisualRefreshRuntime.updateSubclass(entity);
-            ++g_inventorySubclassRefreshCalls;
-        }
-        return record;
-'@
-if (-not $source.Contains($newRecordAnchor)) {
-    throw 'Inventory visual-refresh new-record anchor was not found. Refusing to patch blindly.'
-}
-$source = $source.Replace($newRecordAnchor, $newRecordReplacement)
-
 $frameAnchor = @'
         UpdateInventoryChanger();
         const LONG botRequest = AtomicExchange(
@@ -135,10 +61,5 @@ if (-not $source.Contains($installAnchor)) {
 }
 $source = $source.Replace($installAnchor, $installReplacement)
 
-# No extra shutdown/UI patch is needed here. ShutdownInventoryChanger restores
-# game-facing state, while the refresh cache is payload-owned static memory.
-# Keeping this backend independent from visual teardown and panel layout means a
-# cosmetic UI rearrangement cannot make the DLL fail to build.
-
 Set-Content -LiteralPath $OutputPath -Value $source -Encoding UTF8
-Write-Host "Injected guarded inventory visual refresh backend: $OutputPath"
+Write-Host "Injected current composite-material inventory refresh backend: $OutputPath"
