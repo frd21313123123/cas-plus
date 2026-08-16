@@ -4,6 +4,8 @@
 // can query the same menu-local mouse state.  It never reads game input and it
 // never hooks the renderer/game thread; state is fed only by MenuWindowProc.
 
+static bool CasUiHandleVisualsV2Click(int mouseX, int mouseY);
+
 static int g_casUiMouseX = -32768;
 static int g_casUiMouseY = -32768;
 static bool g_casUiMouseDown = false;
