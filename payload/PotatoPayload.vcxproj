@@ -69,7 +69,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)tools\apply-in
 if errorlevel 1 exit /b %errorlevel%
 powershell -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)tools\apply-inventory-visual-refresh.ps1" -InputPath "$(ProjectDir)$(IntDir)dllmain.chams.cpp" -OutputPath "$(ProjectDir)$(IntDir)dllmain.chams.cpp"
 if errorlevel 1 exit /b %errorlevel%
-powershell -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)tools\apply-inventory-gloves.ps1" -InputPath "$(ProjectDir)$(IntDir)dllmain.chams.cpp" -OutputPath "$(ProjectDir)$(IntDir)dllmain.chams.cpp"</Command>
+powershell -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)tools\apply-inventory-gloves.ps1" -InputPath "$(ProjectDir)$(IntDir)dllmain.chams.cpp" -OutputPath "$(ProjectDir)$(IntDir)dllmain.chams.cpp"
+if errorlevel 1 exit /b %errorlevel%
+powershell -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)tools\apply-inventory-weapon-factory.ps1" -InputPath "$(ProjectDir)$(IntDir)dllmain.chams.cpp" -OutputPath "$(ProjectDir)$(IntDir)dllmain.chams.cpp"</Command>
     </PreBuildEvent>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
@@ -110,7 +112,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)tools\apply-in
 if errorlevel 1 exit /b %errorlevel%
 powershell -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)tools\apply-inventory-visual-refresh.ps1" -InputPath "$(ProjectDir)$(IntDir)dllmain.chams.cpp" -OutputPath "$(ProjectDir)$(IntDir)dllmain.chams.cpp"
 if errorlevel 1 exit /b %errorlevel%
-powershell -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)tools\apply-inventory-gloves.ps1" -InputPath "$(ProjectDir)$(IntDir)dllmain.chams.cpp" -OutputPath "$(ProjectDir)$(IntDir)dllmain.chams.cpp"</Command>
+powershell -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)tools\apply-inventory-gloves.ps1" -InputPath "$(ProjectDir)$(IntDir)dllmain.chams.cpp" -OutputPath "$(ProjectDir)$(IntDir)dllmain.chams.cpp"
+if errorlevel 1 exit /b %errorlevel%
+powershell -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)tools\apply-inventory-weapon-factory.ps1" -InputPath "$(ProjectDir)$(IntDir)dllmain.chams.cpp" -OutputPath "$(ProjectDir)$(IntDir)dllmain.chams.cpp"</Command>
     </PreBuildEvent>
   </ItemDefinitionGroup>
   <ItemGroup>
