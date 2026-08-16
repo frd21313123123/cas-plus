@@ -28,7 +28,7 @@ if ($source.Contains('__try') -or $source.Contains('__except')) {
 Set-Content -LiteralPath $InputPath -Value $source -Encoding UTF8
 Write-Host "Normalized extended inventory guards for no-CRT payload: $InputPath"
 
-# Keep the vcxproj pipeline stable: final local-only inventory layers are
+# Keep the vcxproj pipeline stable: final local-only inventory/UI layers are
 # chained from this already-terminal stage. Children use exact anchors and
 # fail closed if a preceding patch changes their expected source shape.
 $localOps = Join-Path $PSScriptRoot 'apply-inventory-local-ops.ps1'
@@ -38,6 +38,7 @@ $nativeEcon = Join-Path $PSScriptRoot 'fix-inventory-econ-native.ps1'
 $viewFallback = Join-Path $PSScriptRoot 'fix-inventory-econ-view-fallback.ps1'
 $uiRedesign = Join-Path $PSScriptRoot 'apply-ui-redesign.ps1'
 $uiStickerV2 = Join-Path $PSScriptRoot 'apply-ui-sticker-v2.ps1'
+$uiInteractionVisualsV2 = Join-Path $PSScriptRoot 'apply-ui-interaction-visuals-v2.ps1'
 
 # These are PowerShell scripts, not native processes. With ErrorActionPreference
 # set to Stop any child throw terminates this stage; $LASTEXITCODE is deliberately
@@ -49,3 +50,4 @@ $uiStickerV2 = Join-Path $PSScriptRoot 'apply-ui-sticker-v2.ps1'
 & $viewFallback -InputPath $InputPath
 & $uiRedesign -InputPath $InputPath
 & $uiStickerV2 -InputPath $InputPath
+& $uiInteractionVisualsV2 -InputPath $InputPath
