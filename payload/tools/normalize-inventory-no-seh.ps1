@@ -36,6 +36,7 @@ $econLifecycle = Join-Path $PSScriptRoot 'normalize-inventory-econ-lifecycle.ps1
 $runtimeDiagnostics = Join-Path $PSScriptRoot 'apply-inventory-runtime-diagnostics.ps1'
 $nativeEcon = Join-Path $PSScriptRoot 'fix-inventory-econ-native.ps1'
 $viewFallback = Join-Path $PSScriptRoot 'fix-inventory-econ-view-fallback.ps1'
+$uiRedesign = Join-Path $PSScriptRoot 'apply-ui-redesign.ps1'
 
 # These are PowerShell scripts, not native processes. With ErrorActionPreference
 # set to Stop any child throw terminates this stage; $LASTEXITCODE is deliberately
@@ -45,3 +46,4 @@ $viewFallback = Join-Path $PSScriptRoot 'fix-inventory-econ-view-fallback.ps1'
 & $runtimeDiagnostics -InputPath $InputPath
 & $nativeEcon -InputPath $InputPath
 & $viewFallback -InputPath $InputPath
+& $uiRedesign -InputPath $InputPath
