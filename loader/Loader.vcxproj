@@ -71,6 +71,10 @@
       <UACExecutionLevel>RequireAdministrator</UACExecutionLevel>
       <AdditionalDependencies>BlackBone.lib;shlwapi.lib;advapi32.lib;user32.lib;shell32.lib;$(CoreLibraryDependencies);%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
+    <PreBuildEvent>
+      <Command>powershell -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)tools\prepare-secure-main.ps1" -InputPath "$(ProjectDir)src\main.cpp" -OutputPath "$(ProjectDir)$(IntDir)main.secure.cpp"
+if errorlevel 1 exit /b %errorlevel%</Command>
+    </PreBuildEvent>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <ClCompile>
@@ -92,9 +96,13 @@
       <UACExecutionLevel>RequireAdministrator</UACExecutionLevel>
       <AdditionalDependencies>BlackBone.lib;shlwapi.lib;advapi32.lib;user32.lib;shell32.lib;$(CoreLibraryDependencies);%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
+    <PreBuildEvent>
+      <Command>powershell -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)tools\prepare-secure-main.ps1" -InputPath "$(ProjectDir)src\main.cpp" -OutputPath "$(ProjectDir)$(IntDir)main.secure.cpp"
+if errorlevel 1 exit /b %errorlevel%</Command>
+    </PreBuildEvent>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <ClCompile Include="src\main.cpp" />
+    <ClCompile Include="$(ProjectDir)$(IntDir)main.secure.cpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
 </Project>
