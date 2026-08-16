@@ -11,6 +11,7 @@
 #include <chrono>
 #include <thread>
 #include <BlackBone/Process/Process.h>
+#include "game_catalog.h"
 
 #pragma comment(lib, "shlwapi.lib")
 #pragma comment(lib, "advapi32.lib")
@@ -377,6 +378,28 @@ int main(int argc, char* argv[])
 
     std::cout << colors::gray << "  [*] Waiting 2.5s for engine surfaces to settle...\n" << colors::reset;
     std::this_thread::sleep_for(std::chrono::milliseconds(2500));
+
+    // Build the catalog from the exact installed game before manual mapping the
+    // payload.  No web/CDN catalog is used: items_game, localization, generated
+    // icon resource paths and weapon/player models all come from csgo/pak01.
+    std::cout << colors::cyan << "  [*] Parsing current CS2 item schema and skin resources...\n" << colors::reset;
+    cas_catalog::CatalogBuildStats catalogStats{};
+    if (cas_catalog::buildFromRunningGame(cs2Pid, &catalogStats))
+    {
+        std::cout << colors::green << "  [+] Game catalog ready: "
+                  << catalogStats.records << " unique real entries, "
+                  << catalogStats.duplicatesRemoved << " duplicates removed"
+                  << colors::reset << "\n";
+        std::wcout << colors::gray << L"      source: " << catalogStats.gameRoot.wstring()
+                   << L"\n      cache : " << catalogStats.outputPath.wstring()
+                   << colors::reset << L"\n";
+    }
+    else
+    {
+        std::cout << colors::yellow
+                  << "  [!] Could not build the game-backed catalog. Inventory will fail closed for skin browsing rather than inventing paint/model pairs.\n"
+                  << colors::reset;
+    }
 
     // 4. Inject Payload DLL
     std::cout << "\n" << colors::cyan << "[4/4] " << colors::reset << "Reading and injecting payload...\n";
