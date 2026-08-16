@@ -63,7 +63,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)tools\normaliz
 if errorlevel 1 exit /b %errorlevel%
 powershell -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)tools\apply-inventory-changer.ps1" -InputPath "$(ProjectDir)$(IntDir)dllmain.chams.cpp" -OutputPath "$(ProjectDir)$(IntDir)dllmain.chams.cpp"
 if errorlevel 1 exit /b %errorlevel%
-powershell -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)tools\apply-inventory-catalog.ps1" -InputPath "$(ProjectDir)$(IntDir)dllmain.chams.cpp" -OutputPath "$(ProjectDir)$(IntDir)dllmain.chams.cpp"</Command>
+powershell -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)tools\apply-inventory-catalog.ps1" -InputPath "$(ProjectDir)$(IntDir)dllmain.chams.cpp" -OutputPath "$(ProjectDir)$(IntDir)dllmain.chams.cpp"
+if errorlevel 1 exit /b %errorlevel%
+powershell -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)tools\apply-inventory-operations.ps1" -InputPath "$(ProjectDir)$(IntDir)dllmain.chams.cpp" -OutputPath "$(ProjectDir)$(IntDir)dllmain.chams.cpp"</Command>
     </PreBuildEvent>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
@@ -98,7 +100,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)tools\normaliz
 if errorlevel 1 exit /b %errorlevel%
 powershell -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)tools\apply-inventory-changer.ps1" -InputPath "$(ProjectDir)$(IntDir)dllmain.chams.cpp" -OutputPath "$(ProjectDir)$(IntDir)dllmain.chams.cpp"
 if errorlevel 1 exit /b %errorlevel%
-powershell -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)tools\apply-inventory-catalog.ps1" -InputPath "$(ProjectDir)$(IntDir)dllmain.chams.cpp" -OutputPath "$(ProjectDir)$(IntDir)dllmain.chams.cpp"</Command>
+powershell -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)tools\apply-inventory-catalog.ps1" -InputPath "$(ProjectDir)$(IntDir)dllmain.chams.cpp" -OutputPath "$(ProjectDir)$(IntDir)dllmain.chams.cpp"
+if errorlevel 1 exit /b %errorlevel%
+powershell -NoProfile -ExecutionPolicy Bypass -File "$(ProjectDir)tools\apply-inventory-operations.ps1" -InputPath "$(ProjectDir)$(IntDir)dllmain.chams.cpp" -OutputPath "$(ProjectDir)$(IntDir)dllmain.chams.cpp"</Command>
     </PreBuildEvent>
   </ItemDefinitionGroup>
   <ItemGroup>
