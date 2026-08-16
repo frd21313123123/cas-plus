@@ -40,7 +40,7 @@ foreach ($pair in $replacements) {
     $replacement = [string]$pair[1]
     $matches = ([regex]::Matches($patcherSource, [regex]::Escape($needle))).Count
     if ($matches -ne 1) {
-        throw "Visual renderer compatibility anchor expected exactly once, found $matches: $needle"
+        throw "Visual renderer compatibility anchor expected exactly once, found ${matches}: $needle"
     }
     $patcherSource = $patcherSource.Replace($needle, $replacement)
 }
