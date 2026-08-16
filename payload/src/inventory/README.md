@@ -1,132 +1,174 @@
 # cas+ Inventory Changer
 
-The inventory changer is split into three layers:
+The inventory subsystem is split into independent layers and equip domains:
 
-1. **Virtual inventory state** — local item instances, fake item IDs, cosmetics and T/CT equip state.
-2. **Catalog** — read-only weapon/knife/paint metadata used by the UI and compatibility selection.
-3. **Game adapter** — schema-resolved writes which project the equipped virtual item onto locally-owned CS2 econ entities.
+1. **Virtual inventory state** — persistent local item instances, fake item IDs and equip masks.
+2. **Catalog** — read-only weapon/knife/paint metadata plus an `items_game.txt` generator.
+3. **Weapon adapter** — schema-backed projection onto locally-owned `C_EconEntity` objects.
+4. **Glove adapter** — separate projection onto `C_CSPlayerPawn::m_EconGloves`.
+5. **Music adapter** — separate projection onto `CCSPlayerController::m_iMusicKitID`.
+6. **Visual refresh backend** — optional, exact-pattern engine refresh calls for weapon subclass/composite material state.
 
-It does **not** modify Steam Inventory or Game Coordinator state.
+The subsystem does **not** modify Steam Inventory or Game Coordinator state.
 
-## Current architecture
+## Architecture
 
 ```text
-items_game.txt ----> catalog generator ----> read-only catalog
-                                             |
-VirtualInventoryItem[] ----------------------+----> UI / compatibility
+items_game.txt ---> catalog generator ---> read-only catalog
+                                            |
+VirtualInventoryItem[] ---------------------+----> UI / compatibility
         |
-        +--> local persistence (versioned + checksummed)
+        +--> versioned + checksummed local persistence
         |
-        +--> per-team loadout resolver
-                     |
-                     v
-            equipped virtual item
-                     |
-                     v
-            Schema-backed adapter
-                     |
-                     v
-       locally-owned C_EconEntity
+        +--> domain/loadout resolver
+                  |
+                  +--> WeaponAdapter -> owned C_EconEntity
+                  +--> GloveAdapter  -> pawn.m_EconGloves
+                  +--> MusicAdapter  -> controller.m_iMusicKitID
+                  |
+                  +--> guarded visual refresh (weapon domain only)
 ```
 
-### Implemented
+## Implemented
 
-- Fixed-size virtual inventory with up to 64 independent item instances.
-- Stable locally-generated fake item IDs.
-- Per-item paint kit, seed, wear, editable StatTrak and quality values.
-- Item definition override field for knife variants.
-- Per-team equip masks: none, T, CT, or both.
-- Generic knife slot: all knife definitions resolve to one loadout slot.
-- Capture-current-weapon flow to create a virtual item from the active weapon.
-- Automatic projection to every locally-owned econ entity, not only the active weapon.
-- Original-value capture and restoration on disable/unequip/entity replacement/map transition/shutdown.
-- Runtime offsets resolved through Source 2 SchemaSystem; mandatory fields are bounds checked before writes.
-- Optional quality/item-ID/initialization/attachment-dirty fields are used only when present.
-- Local persistence using a versioned binary image and checksum.
-- Inventory UI with paging, selection, editing, duplication, deletion and T/CT loadout assignment.
-- Named weapon/knife catalog and knife cycling in the UI.
-- Baseline knife finish catalog plus raw paint-ID fallback.
-- `generate-inventory-catalog.ps1` can parse a current `items_game.txt` and derive weapon definitions plus weapon/paint compatibility from generated inventory icon paths.
-- Runtime diagnostics in the UI: active definition, number of applied overrides and locally-owned econ entities discovered.
+### Virtual inventory
 
-## Update-safety rules
+- Up to 64 independent persistent item instances.
+- Stable local fake item IDs.
+- Paint kit, seed, wear, StatTrak, quality and definition metadata.
+- T / CT / both / none equip masks.
+- Duplicate/delete.
+- Paging and selected-item editor.
+- Versioned binary persistence with checksum.
+- Original-state capture and restore across disable, unequip, entity replacement, map transition and payload shutdown.
 
-The game adapter must fail closed:
+### Weapon/loadout domain
 
-- never use a stale hard-coded `C_EconEntity` offset;
-- resolve fields by schema name at runtime;
-- validate every resolved offset against the reflected class size;
-- verify entity handles and object identity before restoring captured state;
-- perform game memory writes only from the existing frame-stage game-thread bridge;
-- keep persistence/file I/O on the payload worker thread, never in the render callback;
-- keep catalog parsing/generation outside the injected runtime;
-- never mutate an engine container whose layout/mutation API has not been validated.
+- `C_EconEntity`, `C_AttributeContainer` and `C_EconItemView` fields resolved at runtime through Source 2 SchemaSystem.
+- Mandatory fields bounds-checked against reflected class sizes before any write.
+- Optional quality/item-ID/init/attachment-dirty fields used only when present.
+- Projection to every econ entity owned by the local pawn, not only the active weapon.
+- Full-handle + address + identity validation before restore.
+- Generic knife loadout slot.
+- Add-current flow.
+- `+ Weapon` catalog factory: a virtual weapon can be created without owning/holding it first.
+- Ordinary weapon definition cycling; incompatible carried paint is reset when the weapon definition changes.
+- T/CT compatibility from the catalog.
 
-## Roadmap
+### Catalog
 
-### Phase 1 — virtual inventory / weapon cosmetics
+- Named firearm catalog.
+- Full knife definition selector currently covering Bayonet, Classic, Flip, Gut, Karambit, M9, Huntsman, Falchion, Bowie, Butterfly, Shadow Daggers, Paracord, Survival, Ursus, Navaja, Nomad, Stiletto, Talon, Skeleton and Kukri.
+- Baseline knife finish selector plus raw paint-ID fallback.
+- `generate-inventory-catalog.ps1` parses a current `items_game.txt` and emits weapon definitions plus weapon/paint compatibility derived from `alternate_icons2` generated icon paths.
 
-Status: **implemented in PR #9**.
+### Inventory operations
 
-- item instances;
-- fake IDs;
-- paint/seed/wear/StatTrak;
-- T/CT equip;
-- local persistence;
-- whole-owned-loadout application;
-- safe restore.
+- Editable StatTrak counter (`Off`, `-100`, `-1`, `+1`, `+100`).
+- Small validated quality allow-list and quality cycling.
+- Reset helper in the operations layer.
+- Duplicate starts unequipped and receives a fresh fake ID.
 
-### Phase 2 — item schema/catalog
+### Guarded weapon visual refresh
 
-Status: **baseline implemented; automatic catalog generation added**.
+The fallback fields are not the whole visual pipeline in CS2. An optional backend therefore resolves current client functions by **unique executable patterns**:
+
+- `C_CSWeaponBase::UpdateSubclass(this)`
+- `C_CSWeaponBase::UpdateSkin(this, bool)`
+
+Properties:
+
+- fail closed if a pattern is missing or ambiguous;
+- only operates on already-captured locally-owned weapon entities;
+- requires the projected definition to exist in the local weapon catalog;
+- caches definition/paint/seed/wear/StatTrak state;
+- calls `UpdateSubclass` on definition changes;
+- budgets `UpdateSkin` re-kicks instead of restarting composite-material work every frame;
+- never writes a guessed `CModelState::m_hModel` pointer.
+
+This is a materially better refresh path than fallback writes alone, but visual behavior still needs in-game validation after each CS2 update because the backend is pattern-dependent.
+
+### Gloves domain
+
+Current client schema exposes:
+
+- `C_CSPlayerPawn::m_EconGloves`
+- `C_CSPlayerPawn::m_bNeedToReApplyGloves`
 
 Implemented:
 
-- weapon definition metadata;
-- full knife definition selector;
-- readable names in the inventory UI;
-- baseline knife finish selector;
-- raw ID fallback;
-- offline generator for `items_game.txt`;
-- automatic derivation of weapon/paint compatibility using `alternate_icons2` generated icon paths.
+- separate glove slot in the same persistent virtual inventory;
+- `+ Gloves` factory;
+- definition catalog for Broken Fang, Bloodhound, Sport, Driver, Hand Wraps, Moto, Specialist and Hydra gloves;
+- T/CT equip masks;
+- schema bounds checks;
+- pawn address + identity capture/restore;
+- projected definition, quality and fake item ID;
+- `m_bNeedToReApplyGloves` lifecycle invalidation;
+- no repeated dirty write every frame.
+
+**Glove paint/wear is deliberately not projected yet.** Those values remain stored in the virtual item until a validated client-side econ-attribute mutation API exists.
+
+### Music Kit domain
+
+Current client schema exposes plain controller fields:
+
+- `CCSPlayerController::m_iMusicKitID`
+- `CCSPlayerController::m_iMusicKitMVPs`
+
+Implemented:
+
+- separate music slot in the persistent virtual inventory;
+- `+Music` factory;
+- compact named baseline catalog with raw numeric ID as the source of truth;
+- `< Music` / `Music >` cycling;
+- schema bounds checks;
+- controller address + identity capture/restore;
+- per-team equip masks using the shared loadout model;
+- Music Kit ID projection;
+- virtual item's StatTrak value maps to the local Music Kit MVP counter when that schema field is present;
+- StatTrak `Off` restores the captured original MVP count.
+
+## Update-safety rules
+
+The runtime must fail closed:
+
+- never use stale hard-coded `C_EconEntity`/pawn/controller field offsets;
+- resolve game-facing fields by schema name;
+- bounds-check every reflected field before write;
+- validate full entity/object identity before restore;
+- make game-memory writes only from the existing frame-stage game-thread bridge;
+- keep persistence/file I/O on the payload worker thread;
+- keep catalog parsing/generation outside the injected runtime;
+- do not mutate engine containers whose current client layout/mutation semantics are not validated;
+- optional pattern backends must require a unique executable match and may disable themselves independently.
+
+## Remaining work
+
+### Full generated item/paint catalog
+
+Status: **generator implemented, generated table still to be promoted into the runtime**.
 
 Remaining:
 
-- check in a generated full paint compatibility table after generator validation;
-- resolve localization tokens from the current CS2 localization resources;
-- add category/search/filter UI without stealing keyboard focus from the game;
-- expose rarity metadata in the catalog/UI.
+- run/review the generator against the current `items_game.txt` whenever Valve updates inventory data;
+- check in a generated full weapon/paint compatibility table;
+- resolve localization tokens from current localization resources;
+- add category/search/filter UI without stealing keyboard focus from CS2;
+- expose rarity metadata.
 
-### Phase 3 — knife/viewmodel refresh
+### Stickers and client econ attributes
 
-Status: **under investigation**.
+Status: **schema + attribute IDs understood; safe client mutation adapter pending**.
 
-The current client schema confirms that `C_EconEntity` contains `m_hViewmodelAttachment`, `m_bAttachmentDirty` and `m_nUnloadedModelIndex`. `m_bAttachmentDirty` is already resolved optionally and marked after virtual item projection.
-
-Definition-index override is implemented, but a CS2 world/viewmodel refresh path must be validated before knife model swapping is considered complete.
-
-Required work:
-
-- resolve the current client-side model refresh function or another engine-owned invalidation path;
-- validate the relationship between econ entity, viewmodel attachment and scene/model state;
-- capture/restore any additional model state touched by the adapter;
-- validate on respawn, weapon switch and map transition.
-
-No raw `CModelState::m_hModel` pointer write should be added as a shortcut.
-
-### Phase 4 — stickers and custom names
-
-Status: **schema/attribute research complete; mutation adapter pending**.
-
-Current CS2 schema exposes:
+Current schema exposes:
 
 - `C_EconItemView::m_AttributeList`;
 - `C_EconItemView::m_NetworkedDynamicAttributes`;
 - `CAttributeList::m_Attributes` as `C_UtlVectorEmbeddedNetworkVar<CEconItemAttribute>`;
-- `CEconItemAttribute::{m_iAttributeDefinitionIndex,m_flValue,m_flInitialValue,...}`;
-- five sticker slots in `items_game.txt`.
+- `CEconItemAttribute` definition/value fields.
 
-Current sticker attribute definitions follow the verified four-value blocks:
+Current sticker attribute blocks are verified as:
 
 ```text
 slot 0: 113 id, 114 wear, 115 scale, 116 rotation
@@ -135,56 +177,42 @@ slot 1: starts at 117
 slot 4: ends at 132 rotation
 ```
 
-Do not directly reinterpret/mutate `C_UtlVectorEmbeddedNetworkVar` until its current client layout or an engine setter is validated. The server-side `CAttributeList::SetOrAddAttributeValueByName` signature is known from existing tooling, but it is not a valid substitute for a client-side adapter in this payload.
+A known `CAttributeList::SetOrAddAttributeValueByName` signature exists for **server.dll** plugin tooling. That does not justify calling it from this client payload. The runtime therefore does not reinterpret/replace `C_UtlVectorEmbeddedNetworkVar` or free/replace its storage based on guessed layouts.
 
-Custom-name storage is already part of `VirtualInventoryItem`; a dedicated non-focus-stealing text editor remains to be added.
+This same boundary currently blocks safe glove paint/wear projection and sticker mutation.
 
-### Phase 5 — gloves / agents / music kits
+### Custom names
 
-These are distinct equip domains and should not be forced through weapon `C_EconEntity` logic.
+`VirtualInventoryItem` already stores a 31-character local custom name. Remaining work is a non-focus-stealing editor and a fully validated client string/invalidation path.
 
-Add separate adapters:
+### Agents
 
-- `GloveAdapter`
-- `AgentAdapter`
-- `MusicKitAdapter`
+Agent support remains a separate future adapter. It should use the current pawn/controller model/character-definition lifecycle rather than weapon or glove logic.
 
-Each adapter owns its own schema validation, lifecycle and restore behavior while sharing the same virtual inventory/store layer.
+### Additional local-only inventory operations
 
-### Phase 6 — inventory actions
+Remaining candidates:
 
-Status: **partially implemented**.
-
-Implemented local-only operations:
-
-- duplicate/delete;
-- editable StatTrak counter;
-- quality cycling for a small validated quality allow-list;
-- reset helper in the operations layer.
-
-Remaining:
-
-- name-tag editor;
-- sticker apply/scrape simulation after the sticker attribute adapter is safe;
 - StatTrak swap between virtual items;
-- local case/capsule opening simulation;
-- collections/storage grouping.
-
-These operations mutate only the local virtual inventory. They must not impersonate or modify server-owned Steam/GC inventory state.
+- sticker apply/scrape simulation after the attribute adapter is safe;
+- local case/capsule simulation;
+- collection/storage grouping;
+- richer search/filter UI.
 
 ## Testing checklist
 
 - Build Debug x64 and Release x64.
-- Launch with inventory disabled and verify no econ writes occur.
-- Add the active weapon and verify a new independent virtual item appears.
-- Duplicate an item and verify the copy receives a new fake ID and starts unequipped.
-- Equip different virtual items for T and CT and switch teams.
-- Switch between primary/secondary/knife and verify the matching slot is applied.
-- Cycle knife definitions and verify definition state changes without stale restore data.
-- Edit StatTrak/quality and verify persistence across payload restart.
-- Drop/pick up weapons and verify stale captured entities are not restored into reused handles.
-- Disable changer and verify all captured values are restored.
-- Change map and verify no previous-map entity snapshot survives.
+- Verify every build-time patch stage reports successful injection.
+- Launch with changer disabled and verify no inventory-domain writes occur.
+- Create a weapon through `+ Weapon` without holding it first.
+- Add current weapon and verify it produces an independent virtual item.
+- Duplicate an item and verify a fresh fake ID + unequipped copy.
+- Equip different items for T and CT and switch teams.
+- Switch weapon/knife definitions and verify safe restore on unequip/disable.
+- Verify guarded visual refresh does not run when its pattern backend is unresolved.
+- Create/equip gloves and verify definition restore after disable/respawn/map lifecycle.
+- Create/equip a Music Kit and verify ID/MVP restoration.
+- Drop/pick up weapons and verify stale captures are not restored into reused handles.
 - Restart payload and verify persistence checksum/version loading.
-- Break a mandatory schema field name in a test build and verify the adapter fails closed without writes.
-- Run the catalog generator against the current `items_game.txt` and review the generated weapon/paint compatibility counts before replacing the fallback catalog.
+- Break a mandatory schema name in a test build and verify that domain fails closed.
+- Run catalog generator against the current `items_game.txt` and review generated compatibility counts before promoting the output.
