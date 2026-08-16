@@ -1,18 +1,15 @@
 // cas+ music-kit virtual inventory domain.
 //
-// Current client schema exposes CCSPlayerController::m_iMusicKitID as a plain
-// int32 field, so this adapter does not need econ attribute vectors. Music kits
-// are still represented as normal persistent VirtualInventoryItem instances so
-// duplicate/delete/equip/persistence semantics remain shared with other domains.
+// Current client schema exposes CCSPlayerController::m_iMusicKitID and
+// m_iMusicKitMVPs as plain int32 fields, so this adapter does not need econ
+// attribute vectors. Music kits remain persistent VirtualInventoryItem entries;
+// their StatTrak value maps to the local music-kit MVP counter when available.
 
 struct InventoryMusicCatalogEntry {
     unsigned short musicKitId;
     const wchar_t* displayName;
 };
 
-// Compact baseline from current items_game music_definitions. The ID remains
-// the source of truth; display labels intentionally avoid depending on loaded
-// localization resources inside the no-CRT payload.
 static const InventoryMusicCatalogEntry kInventoryMusicKits[] = {
     { 1,  L"Valve - CS2" },
     { 32, L"Beartooth 02" },
@@ -127,13 +124,23 @@ struct OriginalMusicKitState {
     void* controllerAddress;
     void* controllerIdentity;
     int musicKitId;
+    int musicKitMvps;
 };
 
 static OriginalMusicKitState g_originalMusicKitState{};
 static unsigned long long g_lastProjectedMusicItemId = 0;
 static unsigned short g_lastProjectedMusicKitId = 0;
+static int g_lastProjectedMusicMvps = -2147483647;
 static BYTE g_lastProjectedMusicTeam = 0;
 static int g_inventoryMusicApplyCount = 0;
+
+static void ResetProjectedMusicCache()
+{
+    g_lastProjectedMusicItemId = 0;
+    g_lastProjectedMusicKitId = 0;
+    g_lastProjectedMusicMvps = -2147483647;
+    g_lastProjectedMusicTeam = 0;
+}
 
 static bool ResolveInventoryMusicRuntime(InventoryMusicRuntime* runtime)
 {
@@ -201,6 +208,14 @@ static bool CaptureOriginalMusicKitState(void* controller)
     g_originalMusicKitState.controllerAddress = controller;
     g_originalMusicKitState.controllerIdentity = identity;
     g_originalMusicKitState.musicKitId = *musicKit;
+    if (g_inventoryMusicRuntime.hasMusicKitMvps)
+    {
+        int* mvps = reinterpret_cast<int*>(
+            reinterpret_cast<BYTE*>(controller) +
+            g_inventoryMusicRuntime.musicKitMvpsOffset);
+        if (IsAccessible(mvps, sizeof(int), false))
+            g_originalMusicKitState.musicKitMvps = *mvps;
+    }
     return true;
 }
 
@@ -209,8 +224,7 @@ static void RestoreInventoryMusic(void* controller)
     if (!InventoryMusicStateMatchesController(controller))
     {
         ZeroBytes(&g_originalMusicKitState, sizeof(g_originalMusicKitState));
-        g_lastProjectedMusicItemId = 0;
-        g_lastProjectedMusicKitId = 0;
+        ResetProjectedMusicCache();
         return;
     }
     int* musicKit = reinterpret_cast<int*>(
@@ -218,9 +232,16 @@ static void RestoreInventoryMusic(void* controller)
         g_inventoryMusicRuntime.musicKitIdOffset);
     if (IsAccessible(musicKit, sizeof(int), true))
         *musicKit = g_originalMusicKitState.musicKitId;
+    if (g_inventoryMusicRuntime.hasMusicKitMvps)
+    {
+        int* mvps = reinterpret_cast<int*>(
+            reinterpret_cast<BYTE*>(controller) +
+            g_inventoryMusicRuntime.musicKitMvpsOffset);
+        if (IsAccessible(mvps, sizeof(int), true))
+            *mvps = g_originalMusicKitState.musicKitMvps;
+    }
     ZeroBytes(&g_originalMusicKitState, sizeof(g_originalMusicKitState));
-    g_lastProjectedMusicItemId = 0;
-    g_lastProjectedMusicKitId = 0;
+    ResetProjectedMusicCache();
 }
 
 static bool FindEquippedVirtualMusic(BYTE teamBit,
@@ -256,7 +277,7 @@ static void UpdateInventoryMusic()
     if (!entitySystem)
     {
         ZeroBytes(&g_originalMusicKitState, sizeof(g_originalMusicKitState));
-        g_lastProjectedMusicItemId = 0;
+        ResetProjectedMusicCache();
         return;
     }
 
@@ -272,8 +293,7 @@ static void UpdateInventoryMusic()
         !InventoryMusicStateMatchesController(localController))
     {
         ZeroBytes(&g_originalMusicKitState, sizeof(g_originalMusicKitState));
-        g_lastProjectedMusicItemId = 0;
-        g_lastProjectedMusicKitId = 0;
+        ResetProjectedMusicCache();
     }
 
     bool storeEnabled = false;
@@ -299,6 +319,7 @@ static void UpdateInventoryMusic()
         return;
     if (g_lastProjectedMusicItemId == selected.itemId &&
         g_lastProjectedMusicKitId == selected.overrideDefinitionIndex &&
+        g_lastProjectedMusicMvps == selected.statTrak &&
         g_lastProjectedMusicTeam == localTeam)
         return;
 
@@ -308,8 +329,20 @@ static void UpdateInventoryMusic()
     if (!IsAccessible(musicKit, sizeof(int), true))
         return;
     *musicKit = static_cast<int>(selected.overrideDefinitionIndex);
+
+    if (g_inventoryMusicRuntime.hasMusicKitMvps)
+    {
+        int* mvps = reinterpret_cast<int*>(
+            reinterpret_cast<BYTE*>(localController) +
+            g_inventoryMusicRuntime.musicKitMvpsOffset);
+        if (IsAccessible(mvps, sizeof(int), true))
+            *mvps = selected.statTrak >= 0 ? selected.statTrak :
+                g_originalMusicKitState.musicKitMvps;
+    }
+
     g_lastProjectedMusicItemId = selected.itemId;
     g_lastProjectedMusicKitId = selected.overrideDefinitionIndex;
+    g_lastProjectedMusicMvps = selected.statTrak;
     g_lastProjectedMusicTeam = localTeam;
     ++g_inventoryMusicApplyCount;
 }
