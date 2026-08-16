@@ -23,6 +23,55 @@ if ($hookIndex -lt 0) {
 $source = $source.Substring(0, $hookIndex) + $module + "`r`n`r`n" +
     $source.Substring($hookIndex)
 
+# Keep the two optional refresh capabilities independent. A game update can
+# invalidate one signature while leaving the other valid; the generated code
+# should retain whichever exact/unique backend still resolves.
+$runtimeGateAnchor = @'
+    if (!g_inventoryVisualRefreshRuntime.resolved ||
+        !g_inventoryVisualRefreshRuntime.skinReady ||
+        !g_inventoryRuntime.ready || !g_preResolvedEntityRuntimeReady ||
+        g_originalWeaponCosmeticsCount <= 0)
+'@
+$runtimeGateReplacement = @'
+    if (!g_inventoryVisualRefreshRuntime.resolved ||
+        (!g_inventoryVisualRefreshRuntime.skinReady &&
+         !g_inventoryVisualRefreshRuntime.subclassReady) ||
+        !g_inventoryRuntime.ready || !g_preResolvedEntityRuntimeReady ||
+        g_originalWeaponCosmeticsCount <= 0)
+'@
+if (-not $source.Contains($runtimeGateAnchor)) {
+    throw 'Inventory visual-refresh runtime gate anchor was not found. Refusing to patch blindly.'
+}
+$source = $source.Replace($runtimeGateAnchor, $runtimeGateReplacement)
+
+$skinCallAnchor = @'
+        if (record->refreshBudget > 0 && record->refreshCooldown == 0)
+        {
+            g_inventoryVisualRefreshRuntime.updateSkin(entity, true);
+            ++g_inventoryVisualRefreshCalls;
+            --record->refreshBudget;
+            // ~40 frame-stage passes between material re-kicks. This keeps the
+            // composite builder progressing instead of restarting each frame.
+            record->refreshCooldown = 40;
+        }
+'@
+$skinCallReplacement = @'
+        if (g_inventoryVisualRefreshRuntime.skinReady &&
+            record->refreshBudget > 0 && record->refreshCooldown == 0)
+        {
+            g_inventoryVisualRefreshRuntime.updateSkin(entity, true);
+            ++g_inventoryVisualRefreshCalls;
+            --record->refreshBudget;
+            // ~40 frame-stage passes between material re-kicks. This keeps the
+            // composite builder progressing instead of restarting each frame.
+            record->refreshCooldown = 40;
+        }
+'@
+if (-not $source.Contains($skinCallAnchor)) {
+    throw 'Inventory visual-refresh skin-call anchor was not found. Refusing to patch blindly.'
+}
+$source = $source.Replace($skinCallAnchor, $skinCallReplacement)
+
 # On first observation the projected definition has already been written. Kick
 # UpdateSubclass once for a newly tracked, catalog-confirmed weapon so knife
 # definition swaps get a chance to rebuild their subclass/model state.
@@ -111,9 +160,16 @@ $diagReplacement = @'
         -1, &note, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
 
     SetTextColor(hdc, RGB_COLOR(113, 113, 122));
-    RECT refreshDiag = { 598, 444, 735, 463 };
-    if (g_inventoryVisualRefreshRuntime.skinReady)
-        DrawTextW(hdc, L"refresh: skin/subclass", -1, &refreshDiag,
+    RECT refreshDiag = { 570, 444, 735, 463 };
+    if (g_inventoryVisualRefreshRuntime.skinReady &&
+        g_inventoryVisualRefreshRuntime.subclassReady)
+        DrawTextW(hdc, L"refresh: skin + subclass", -1, &refreshDiag,
+            DT_RIGHT | DT_SINGLELINE);
+    else if (g_inventoryVisualRefreshRuntime.skinReady)
+        DrawTextW(hdc, L"refresh: skin only", -1, &refreshDiag,
+            DT_RIGHT | DT_SINGLELINE);
+    else if (g_inventoryVisualRefreshRuntime.subclassReady)
+        DrawTextW(hdc, L"refresh: subclass only", -1, &refreshDiag,
             DT_RIGHT | DT_SINGLELINE);
     else
         DrawTextW(hdc, L"refresh: fallback only", -1, &refreshDiag,
