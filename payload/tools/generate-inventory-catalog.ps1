@@ -14,9 +14,10 @@ if (-not (Test-Path -LiteralPath $ItemsGamePath)) {
 
 $lines = [System.IO.File]::ReadAllLines((Resolve-Path -LiteralPath $ItemsGamePath))
 
-function Find-SectionRange {
+function Find-SectionRanges {
     param([string]$Name)
 
+    $result = New-Object System.Collections.Generic.List[object]
     $quoted = '"' + $Name + '"'
     for ($i = 0; $i -lt $lines.Length; ++$i) {
         if ($lines[$i].Trim() -ne $quoted) { continue }
@@ -26,18 +27,32 @@ function Find-SectionRange {
         if ($open -ge $lines.Length -or $lines[$open].Trim() -ne '{') { continue }
 
         $depth = 1
+        $close = -1
         for ($j = $open + 1; $j -lt $lines.Length; ++$j) {
             $trim = $lines[$j].Trim()
             if ($trim -eq '{') { ++$depth }
             elseif ($trim -eq '}') {
                 --$depth
                 if ($depth -eq 0) {
-                    return [pscustomobject]@{ Start = $open + 1; End = $j - 1 }
+                    $close = $j
+                    break
                 }
             }
         }
+        if ($close -lt 0) { throw "Section '$Name' was malformed." }
+        $result.Add([pscustomobject]@{ Start = $open + 1; End = $close - 1 })
+        $i = $close
     }
-    throw "Section '$Name' was not found or was malformed."
+    return $result
+}
+
+function Find-SectionRange {
+    param([string]$Name)
+    $ranges = Find-SectionRanges $Name
+    if ($ranges.Count -eq 0) {
+        throw "Section '$Name' was not found or was malformed."
+    }
+    return $ranges[0]
 }
 
 function Get-NumericBlocks {
@@ -93,6 +108,7 @@ function Escape-CppWide {
 $itemsRange = Find-SectionRange 'items'
 $paintRange = Find-SectionRange 'paint_kits'
 $iconsRange = Find-SectionRange 'alternate_icons2'
+$musicRanges = Find-SectionRanges 'music_definitions'
 
 $weapons = New-Object System.Collections.Generic.List[object]
 foreach ($block in (Get-NumericBlocks $itemsRange)) {
@@ -117,6 +133,23 @@ foreach ($block in (Get-NumericBlocks $paintRange)) {
         PaintKit = $block.Id
         Internal = $name
         Token = $description
+    }
+}
+
+# Some current items_game snapshots contain more than one music_definitions
+# section. Merge them by numeric music-kit ID instead of assuming one block.
+$musicById = @{}
+foreach ($musicRange in $musicRanges) {
+    foreach ($block in (Get-NumericBlocks $musicRange)) {
+        if ($block.Id -lt 1 -or $block.Id -gt 65535) { continue }
+        $name = Read-ScalarFromBlock $block 'name'
+        if ([string]::IsNullOrWhiteSpace($name)) { continue }
+        $locName = Read-ScalarFromBlock $block 'loc_name'
+        $musicById[$block.Id] = [pscustomobject]@{
+            MusicKit = $block.Id
+            Internal = $name
+            Token = $locName
+        }
     }
 }
 
@@ -186,10 +219,24 @@ foreach ($entry in ($compatibility.Values | Sort-Object Definition, PaintKit)) {
 }
 [void]$out.AppendLine('};')
 [void]$out.AppendLine('')
-[void]$out.AppendLine(('// weapons={0}, compatible weapon/paint pairs={1}' -f $weapons.Count, $compatibility.Count))
+[void]$out.AppendLine('struct InventoryGeneratedMusicEntry {')
+[void]$out.AppendLine('    unsigned short musicKitId;')
+[void]$out.AppendLine('    const wchar_t* internalName;')
+[void]$out.AppendLine('    const wchar_t* localizationToken;')
+[void]$out.AppendLine('};')
+[void]$out.AppendLine('')
+[void]$out.AppendLine('static const InventoryGeneratedMusicEntry kGeneratedInventoryMusic[] = {')
+foreach ($entry in ($musicById.Values | Sort-Object MusicKit)) {
+    $internal = Escape-CppWide $entry.Internal
+    $token = Escape-CppWide $entry.Token
+    [void]$out.AppendLine(('    {{ {0}, L"{1}", L"{2}" }},' -f $entry.MusicKit, $internal, $token))
+}
+[void]$out.AppendLine('};')
+[void]$out.AppendLine('')
+[void]$out.AppendLine(('// weapons={0}, compatible weapon/paint pairs={1}, music kits={2}' -f $weapons.Count, $compatibility.Count, $musicById.Count))
 
 $outputDirectory = Split-Path -Parent $OutputPath
 if ($outputDirectory) { New-Item -ItemType Directory -Path $outputDirectory -Force | Out-Null }
 [System.IO.File]::WriteAllText($OutputPath, $out.ToString(), [System.Text.UTF8Encoding]::new($false))
 Write-Host "Generated inventory catalog candidate: $OutputPath"
-Write-Host "Weapons: $($weapons.Count); compatible weapon/paint pairs: $($compatibility.Count)"
+Write-Host "Weapons: $($weapons.Count); compatible weapon/paint pairs: $($compatibility.Count); music kits: $($musicById.Count)"
