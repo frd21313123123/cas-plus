@@ -1,26 +1,37 @@
-// cas+ guarded visual refresh backend for projected virtual inventory items.
+// cas+ guarded live weapon material refresh backend.
 //
-// Fallback econ fields can be written safely through schema-resolved offsets,
-// but CS2's composite material and weapon subclass caches are separate. This
-// backend resolves two current client functions by unique executable patterns:
-//   C_CSWeaponBase::UpdateSubclass(this)
-//   C_CSWeaponBase::UpdateSkin(this, bool)
-// If either pattern is missing/ambiguous, that part of the backend stays off.
-// Calls are restricted to locally-owned entities already captured by the
-// inventory adapter and to definition indexes present in the weapon catalog.
-//
-// Refreshes are budgeted. UpdateSkin restarts composite-material work, so
-// calling it every FrameStageNotify would continuously restart the build.
+// Projecting fallback econ fields is not sufficient on current CS2 builds:
+// weapon skins are backed by a C_EconItemView attribute set and a separate
+// composite-material cache.  This backend therefore mirrors paint attributes
+// onto the live weapon item view and rebuilds the material cache with the
+// current client functions.  Every pointer/function/embedded-owner offset is
+// validated at runtime and all calls remain restricted to locally-owned weapon
+// entities that were already captured by the inventory adapter.
 
 using InventoryUpdateSubclassFn = void (*)(void*);
 using InventoryUpdateSkinFn = void (*)(void*, bool);
+using InventoryUpdateCompositeMaterialFn = void (*)(void*, char);
+using InventoryUpdateCompositeMaterialSetFn = void (*)(void*, char);
+using InventorySetViewAttributeByNameFn = void (*)(void*, const char*, float);
 
 struct InventoryVisualRefreshRuntime {
     bool resolved;
     bool subclassReady;
     bool skinReady;
+    bool compositeReady;
+    bool compositeSetReady;
+    bool viewAttributeReady;
+    bool compositeOwnerOffsetReady;
+    bool hasRestoreMaterial;
+    bool hasDisallowSoc;
+    unsigned int compositeOwnerOffset;
+    unsigned int restoreMaterialOffset;
+    unsigned int disallowSocOffset;
     InventoryUpdateSubclassFn updateSubclass;
     InventoryUpdateSkinFn updateSkin;
+    InventoryUpdateCompositeMaterialFn updateCompositeMaterial;
+    InventoryUpdateCompositeMaterialSetFn updateCompositeMaterialSet;
+    InventorySetViewAttributeByNameFn setViewAttributeByName;
 };
 
 static InventoryVisualRefreshRuntime g_inventoryVisualRefreshRuntime{};
@@ -43,6 +54,9 @@ static InventoryVisualRefreshRecord g_inventoryVisualRefreshRecords[INVENTORY_MA
 static int g_inventoryVisualRefreshRecordCount = 0;
 static unsigned int g_inventoryVisualRefreshCalls = 0;
 static unsigned int g_inventorySubclassRefreshCalls = 0;
+static unsigned int g_inventoryCompositeRefreshCalls = 0;
+static unsigned int g_inventoryCompositeSetRefreshCalls = 0;
+static unsigned int g_inventoryViewAttributeRefreshCalls = 0;
 
 static unsigned int InventoryFloatBits(float value)
 {
@@ -52,6 +66,47 @@ static unsigned int InventoryFloatBits(float value)
     return bits;
 }
 
+static BYTE* InventoryVisualResolveRelative(BYTE* instruction,
+    int displacementOffset, int instructionSize)
+{
+    if (!instruction || displacementOffset < 0 || instructionSize <= 0 ||
+        !IsAccessible(instruction + displacementOffset, sizeof(LONG), false))
+        return nullptr;
+    const LONG displacement = *reinterpret_cast<LONG*>(
+        instruction + displacementOffset);
+    return instruction + instructionSize + displacement;
+}
+
+static bool ResolveInventoryVisualItemViewOffsets(
+    InventoryVisualRefreshRuntime* runtime)
+{
+    if (!runtime)
+        return false;
+    void* scope = nullptr;
+    if (!ResolveClientSchemaScope(&scope))
+        return false;
+    SchemaClassInfoView* itemView = FindSchemaClass(scope, "C_EconItemView");
+    if (!itemView || itemView->size <= 0)
+        return false;
+
+    unsigned int restore = 0;
+    if (FindSchemaField(itemView, "m_bRestoreCustomMaterialAfterPrecache", &restore) &&
+        restore + sizeof(BYTE) <= static_cast<unsigned int>(itemView->size))
+    {
+        runtime->restoreMaterialOffset = restore;
+        runtime->hasRestoreMaterial = true;
+    }
+
+    unsigned int disallowSoc = 0;
+    if (FindSchemaField(itemView, "m_bDisallowSOC", &disallowSoc) &&
+        disallowSoc + sizeof(BYTE) <= static_cast<unsigned int>(itemView->size))
+    {
+        runtime->disallowSocOffset = disallowSoc;
+        runtime->hasDisallowSoc = true;
+    }
+    return runtime->hasRestoreMaterial || runtime->hasDisallowSoc;
+}
+
 static bool ResolveInventoryVisualRefreshRuntime(HMODULE clientModule)
 {
     g_inventoryVisualRefreshRuntime = {};
@@ -59,27 +114,79 @@ static bool ResolveInventoryVisualRefreshRuntime(HMODULE clientModule)
     if (!clientModule)
         return false;
 
-    // C_CSWeaponBase::UpdateSubclass. Keep the pattern deliberately specific;
-    // FindUniquePattern returns null if more than one candidate exists.
+    // Optional legacy subclass rebuild. Definition/model changes still benefit
+    // from it when this older entry point remains unique on the running build.
     static const int kUpdateSubclassPattern[] = {
         0x4C, 0x8B, 0xDC, 0x53, 0x48, 0x81, 0xEC,
         -1, -1, -1, -1, 0x48, 0x8B, 0x41
     };
 
-    // C_CSWeaponBase::UpdateSkin(this, bool). This longer prologue includes
-    // both internal calls and the item-view address calculation, reducing the
-    // chance of accepting an unrelated short prologue after a game update.
+    // Current C_CSWeaponBase::UpdateCompositeMaterial implementation.
+    static const int kUpdateCompositeMaterialPattern[] = {
+        0x48,0x89,0x5C,0x24,0x10,0x48,0x89,0x6C,0x24,0x18,
+        0x48,0x89,0x74,0x24,0x20,0x57,0x41,0x56,0x41,0x57,
+        0x48,0x83,0xEC,0x20,0x44,0x0F,0xB6,0xF2
+    };
+    // Alternate current call-site signature; target is the rel32 call.
+    static const int kUpdateCompositeMaterialCallPattern[] = {
+        0xE8,-1,-1,-1,-1,0x48,0x8D,0x8B,-1,-1,-1,-1,
+        0x48,0x89,0xBC,0x24
+    };
+    static const int kUpdateCompositeMaterialSetPattern[] = {
+        0x40,0x55,0x53,0x41,0x57,0x48,0x8D,0xAC,0x24,
+        0x00,0xFE,-1,-1,0x48,0x81,0xEC
+    };
+
+    // The embedded CCompositeMaterialOwner is reached by an add rcx, imm32 in
+    // the current material-update path. Read the immediate rather than baking
+    // the observed 0x608 offset into the payload.
+    static const int kCompositeOwnerOffsetPattern[] = {
+        0x48,0x81,0xC1,-1,-1,-1,-1,0xB2,-1,0xE8,-1,-1,-1,-1,
+        0x48,0x8D,0x8B
+    };
+
+    // Existing independently-validated C_EconItemView attribute setter call.
+    static const int kViewAttributeCallPattern[] = {
+        0xE8,-1,-1,-1,-1,0x66,0x41,0x0F,0x6E,0xD4
+    };
+
+    // Keep the previous UpdateSkin entry point as an optional compatibility
+    // kick. It is not required for the new composite-material path.
     static const int kUpdateSkinPattern[] = {
-        0x48, 0x89, 0x5C, 0x24, 0x08, 0x57, 0x48, 0x83, 0xEC, 0x20,
-        0x8B, 0xDA, 0x48, 0x8B, 0xF9, 0xE8, -1, -1, -1, -1,
-        0xF6, 0xC3, 0x01, 0x74, 0x0A, 0x33, 0xD2, 0x48, 0x8B, 0xCF,
-        0xE8, -1, -1, -1, -1, 0x48, 0x8D, 0x8F,
-        0x90, 0x19, 0x00, 0x00
+        0x48,0x89,0x5C,0x24,0x08,0x57,0x48,0x83,0xEC,0x20,
+        0x8B,0xDA,0x48,0x8B,0xF9,0xE8,-1,-1,-1,-1,
+        0xF6,0xC3,0x01,0x74,0x0A,0x33,0xD2,0x48,0x8B,0xCF,
+        0xE8,-1,-1,-1,-1,0x48,0x8D,0x8F,
+        0x90,0x19,0x00,0x00
     };
 
     BYTE* subclass = FindUniquePattern(clientModule,
         kUpdateSubclassPattern,
         sizeof(kUpdateSubclassPattern) / sizeof(kUpdateSubclassPattern[0]));
+    BYTE* composite = FindUniquePattern(clientModule,
+        kUpdateCompositeMaterialPattern,
+        sizeof(kUpdateCompositeMaterialPattern) /
+            sizeof(kUpdateCompositeMaterialPattern[0]));
+    if (!composite)
+    {
+        BYTE* compositeCall = FindUniquePattern(clientModule,
+            kUpdateCompositeMaterialCallPattern,
+            sizeof(kUpdateCompositeMaterialCallPattern) /
+                sizeof(kUpdateCompositeMaterialCallPattern[0]));
+        if (compositeCall)
+            composite = InventoryVisualResolveRelative(compositeCall, 1, 5);
+    }
+    BYTE* compositeSet = FindUniquePattern(clientModule,
+        kUpdateCompositeMaterialSetPattern,
+        sizeof(kUpdateCompositeMaterialSetPattern) /
+            sizeof(kUpdateCompositeMaterialSetPattern[0]));
+    BYTE* ownerOffset = FindUniquePattern(clientModule,
+        kCompositeOwnerOffsetPattern,
+        sizeof(kCompositeOwnerOffsetPattern) /
+            sizeof(kCompositeOwnerOffsetPattern[0]));
+    BYTE* viewAttributeCall = FindUniquePattern(clientModule,
+        kViewAttributeCallPattern,
+        sizeof(kViewAttributeCallPattern) / sizeof(kViewAttributeCallPattern[0]));
     BYTE* skin = FindUniquePattern(clientModule,
         kUpdateSkinPattern,
         sizeof(kUpdateSkinPattern) / sizeof(kUpdateSkinPattern[0]));
@@ -90,6 +197,38 @@ static bool ResolveInventoryVisualRefreshRuntime(HMODULE clientModule)
             reinterpret_cast<InventoryUpdateSubclassFn>(subclass);
         g_inventoryVisualRefreshRuntime.subclassReady = true;
     }
+    if (composite && IsExecutable(composite))
+    {
+        g_inventoryVisualRefreshRuntime.updateCompositeMaterial =
+            reinterpret_cast<InventoryUpdateCompositeMaterialFn>(composite);
+        g_inventoryVisualRefreshRuntime.compositeReady = true;
+    }
+    if (compositeSet && IsExecutable(compositeSet))
+    {
+        g_inventoryVisualRefreshRuntime.updateCompositeMaterialSet =
+            reinterpret_cast<InventoryUpdateCompositeMaterialSetFn>(compositeSet);
+        g_inventoryVisualRefreshRuntime.compositeSetReady = true;
+    }
+    if (ownerOffset && IsAccessible(ownerOffset + 3, sizeof(unsigned int), false))
+    {
+        const unsigned int offset = *reinterpret_cast<unsigned int*>(ownerOffset + 3);
+        if (offset >= 0x100 && offset <= 0x2000)
+        {
+            g_inventoryVisualRefreshRuntime.compositeOwnerOffset = offset;
+            g_inventoryVisualRefreshRuntime.compositeOwnerOffsetReady = true;
+        }
+    }
+    if (viewAttributeCall)
+    {
+        BYTE* attributeSetter = InventoryVisualResolveRelative(
+            viewAttributeCall, 1, 5);
+        if (attributeSetter && IsExecutable(attributeSetter))
+        {
+            g_inventoryVisualRefreshRuntime.setViewAttributeByName =
+                reinterpret_cast<InventorySetViewAttributeByNameFn>(attributeSetter);
+            g_inventoryVisualRefreshRuntime.viewAttributeReady = true;
+        }
+    }
     if (skin && IsExecutable(skin))
     {
         g_inventoryVisualRefreshRuntime.updateSkin =
@@ -97,8 +236,11 @@ static bool ResolveInventoryVisualRefreshRuntime(HMODULE clientModule)
         g_inventoryVisualRefreshRuntime.skinReady = true;
     }
 
+    ResolveInventoryVisualItemViewOffsets(&g_inventoryVisualRefreshRuntime);
     g_inventoryVisualRefreshRuntime.resolved = true;
-    return g_inventoryVisualRefreshRuntime.subclassReady ||
+    return (g_inventoryVisualRefreshRuntime.compositeReady &&
+            g_inventoryVisualRefreshRuntime.compositeOwnerOffsetReady) ||
+        g_inventoryVisualRefreshRuntime.compositeSetReady ||
         g_inventoryVisualRefreshRuntime.skinReady;
 }
 
@@ -113,10 +255,10 @@ static InventoryVisualRefreshRecord* FindInventoryVisualRefreshRecord(
 
 static bool ReadInventoryProjectedState(void* entity,
     unsigned short* definitionIndex, int* paintKit, int* seed,
-    int* statTrak, unsigned int* wearBits)
+    int* statTrak, unsigned int* wearBits, float* wearValue)
 {
     if (!entity || !definitionIndex || !paintKit || !seed ||
-        !statTrak || !wearBits || !g_inventoryRuntime.ready)
+        !statTrak || !wearBits || !wearValue || !g_inventoryRuntime.ready)
         return false;
 
     if (!InventoryReadDefinition(entity, definitionIndex))
@@ -142,8 +284,56 @@ static bool ReadInventoryProjectedState(void* entity,
     *paintKit = *paint;
     *seed = *seedField;
     *statTrak = *stat;
-    *wearBits = InventoryFloatBits(*wear);
+    *wearValue = InventoryClampWear(*wear);
+    *wearBits = InventoryFloatBits(*wearValue);
     return true;
+}
+
+static bool InventoryVisualApplyItemViewState(void* entity,
+    int paintKit, int seed, float wear)
+{
+    if (!entity || !g_inventoryRuntime.ready)
+        return false;
+    BYTE* itemView = InventoryItemView(entity);
+    if (!itemView)
+        return false;
+
+    bool changed = false;
+    if (g_inventoryVisualRefreshRuntime.viewAttributeReady &&
+        g_inventoryVisualRefreshRuntime.setViewAttributeByName)
+    {
+        g_inventoryVisualRefreshRuntime.setViewAttributeByName(
+            itemView, "set item texture prefab", static_cast<float>(paintKit));
+        g_inventoryVisualRefreshRuntime.setViewAttributeByName(
+            itemView, "set item texture seed",
+            static_cast<float>(InventoryClampInt(seed, 0, 1000)));
+        g_inventoryVisualRefreshRuntime.setViewAttributeByName(
+            itemView, "set item texture wear", InventoryClampWear(wear));
+        ++g_inventoryViewAttributeRefreshCalls;
+        changed = true;
+    }
+
+    if (g_inventoryRuntime.hasItemInitialized)
+    {
+        BYTE* initialized = itemView + g_inventoryRuntime.itemInitializedOffset;
+        if (IsAccessible(initialized, sizeof(BYTE), true))
+            *initialized = 1;
+    }
+    if (g_inventoryVisualRefreshRuntime.hasRestoreMaterial)
+    {
+        BYTE* restore = itemView +
+            g_inventoryVisualRefreshRuntime.restoreMaterialOffset;
+        if (IsAccessible(restore, sizeof(BYTE), true))
+            *restore = 1;
+    }
+    if (g_inventoryVisualRefreshRuntime.hasDisallowSoc)
+    {
+        BYTE* disallowSoc = itemView +
+            g_inventoryVisualRefreshRuntime.disallowSocOffset;
+        if (IsAccessible(disallowSoc, sizeof(BYTE), true))
+            *disallowSoc = 0;
+    }
+    return changed;
 }
 
 static bool InventoryRefreshRecordMatchesEntity(
@@ -188,9 +378,14 @@ static InventoryVisualRefreshRecord* CaptureInventoryVisualRefreshRecord(
         record->seed = seed;
         record->statTrak = statTrak;
         record->wearBits = wearBits;
-        record->refreshBudget = 3;
+        record->refreshBudget = 4;
         record->refreshCooldown = 0;
         record->seen = true;
+        if (g_inventoryVisualRefreshRuntime.subclassReady)
+        {
+            g_inventoryVisualRefreshRuntime.updateSubclass(entity);
+            ++g_inventorySubclassRefreshCalls;
+        }
         return record;
     }
 
@@ -207,8 +402,7 @@ static InventoryVisualRefreshRecord* CaptureInventoryVisualRefreshRecord(
 
     if (cosmeticsChanged)
     {
-        if (definitionChanged &&
-            g_inventoryVisualRefreshRuntime.subclassReady)
+        if (definitionChanged && g_inventoryVisualRefreshRuntime.subclassReady)
         {
             g_inventoryVisualRefreshRuntime.updateSubclass(entity);
             ++g_inventorySubclassRefreshCalls;
@@ -218,7 +412,7 @@ static InventoryVisualRefreshRecord* CaptureInventoryVisualRefreshRecord(
         record->seed = seed;
         record->statTrak = statTrak;
         record->wearBits = wearBits;
-        record->refreshBudget = 3;
+        record->refreshBudget = 4;
         record->refreshCooldown = 0;
     }
     return record;
@@ -227,7 +421,9 @@ static InventoryVisualRefreshRecord* CaptureInventoryVisualRefreshRecord(
 static void UpdateInventoryVisualRefresh()
 {
     if (!g_inventoryVisualRefreshRuntime.resolved ||
-        !g_inventoryVisualRefreshRuntime.skinReady ||
+        (!g_inventoryVisualRefreshRuntime.compositeReady &&
+         !g_inventoryVisualRefreshRuntime.compositeSetReady &&
+         !g_inventoryVisualRefreshRuntime.skinReady) ||
         !g_inventoryRuntime.ready || !g_preResolvedEntityRuntimeReady ||
         g_originalWeaponCosmeticsCount <= 0)
         return;
@@ -256,8 +452,9 @@ static void UpdateInventoryVisualRefresh()
         int seed = 0;
         int statTrak = -1;
         unsigned int wearBits = 0;
+        float wear = 0.0001f;
         if (!ReadInventoryProjectedState(entity, &definitionIndex,
-            &paintKit, &seed, &statTrak, &wearBits))
+            &paintKit, &seed, &statTrak, &wearBits, &wear))
             continue;
 
         InventoryVisualRefreshRecord* record =
@@ -269,15 +466,38 @@ static void UpdateInventoryVisualRefresh()
 
         if (record->refreshCooldown > 0)
             --record->refreshCooldown;
-        if (record->refreshBudget > 0 && record->refreshCooldown == 0)
+        if (record->refreshBudget <= 0 || record->refreshCooldown != 0)
+            continue;
+
+        InventoryVisualApplyItemViewState(entity, paintKit, seed, wear);
+
+        if (g_inventoryVisualRefreshRuntime.compositeReady &&
+            g_inventoryVisualRefreshRuntime.compositeOwnerOffsetReady)
+        {
+            BYTE* owner = reinterpret_cast<BYTE*>(entity) +
+                g_inventoryVisualRefreshRuntime.compositeOwnerOffset;
+            if (IsAccessible(owner, 0x20, false))
+            {
+                g_inventoryVisualRefreshRuntime.updateCompositeMaterial(
+                    owner, 1);
+                ++g_inventoryCompositeRefreshCalls;
+            }
+        }
+        if (g_inventoryVisualRefreshRuntime.compositeSetReady)
+        {
+            g_inventoryVisualRefreshRuntime.updateCompositeMaterialSet(
+                entity, 0);
+            ++g_inventoryCompositeSetRefreshCalls;
+        }
+        if (g_inventoryVisualRefreshRuntime.skinReady)
         {
             g_inventoryVisualRefreshRuntime.updateSkin(entity, true);
             ++g_inventoryVisualRefreshCalls;
-            --record->refreshBudget;
-            // ~40 frame-stage passes between material re-kicks. This keeps the
-            // composite builder progressing instead of restarting each frame.
-            record->refreshCooldown = 40;
         }
+
+        --record->refreshBudget;
+        // Let asynchronous composite construction progress before another kick.
+        record->refreshCooldown = 30;
     }
 
     int destination = 0;
