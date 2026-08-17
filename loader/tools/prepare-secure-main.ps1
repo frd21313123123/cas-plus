@@ -10,6 +10,14 @@ $ErrorActionPreference = 'Stop'
 
 $source = Get-Content -LiteralPath $InputPath -Raw -Encoding UTF8
 
+function Replace-Required([string]$Needle, [string]$Replacement, [string]$Name) {
+    $count = ([regex]::Matches($script:source, [regex]::Escape($Needle))).Count
+    if ($count -ne 1) {
+        throw "Secure-loader anchor '$Name' expected exactly once, found $count."
+    }
+    $script:source = $script:source.Replace($Needle, $Replacement)
+}
+
 $defaultFlags = '-dx11 -insecure -allow_third_party_software -novid -nojoy'
 $secureFlags = '-dx11 -allow_third_party_software -novid -nojoy'
 $defaultCount = ([regex]::Matches($source, [regex]::Escape($defaultFlags))).Count
@@ -31,19 +39,50 @@ $newArgBlock = @'
                 continue;
             launchArgs += wideArg + L" ";
 '@
-$argCount = ([regex]::Matches($source, [regex]::Escape($oldArgBlock))).Count
-if ($argCount -ne 1) {
-    throw "Secure-loader custom-argument anchor mismatch (expected 1 match, got $argCount)."
-}
-$source = $source.Replace($oldArgBlock, $newArgBlock)
+Replace-Required $oldArgBlock $newArgBlock 'custom argument filter'
 
 $oldLaunchStatus = 'with flags (-dx11 -insecure ...)'
 $newLaunchStatus = 'without -insecure (-dx11 ...)'
-$statusCount = ([regex]::Matches($source, [regex]::Escape($oldLaunchStatus))).Count
-if ($statusCount -ne 1) {
-    throw "Secure-loader status anchor mismatch (expected 1 match, got $statusCount)."
-}
-$source = $source.Replace($oldLaunchStatus, $newLaunchStatus)
+Replace-Required $oldLaunchStatus $newLaunchStatus 'secure launch status'
+
+$includeAnchor = '#include "game_catalog.h"'
+$includeReplacement = @'
+#include "game_catalog.h"
+#include "attachment_catalog.h"
+'@
+Replace-Required $includeAnchor $includeReplacement.TrimEnd() 'attachment catalog include'
+
+$injectAnchor = @'
+    // 4. Inject Payload DLL
+'@
+$attachmentBuild = @'
+    // Build real current-game sticker/patch/keychain metadata alongside the
+    // weapon/paint catalog. The payload fails closed when this cache is absent,
+    // so arbitrary attachment IDs can never be invented by the editor.
+    cas_catalog::AttachmentBuildStats attachmentStats{};
+    if (cas_catalog::buildAttachmentCatalogFromRunningGame(
+        cs2Pid, &attachmentStats))
+    {
+        std::cout << colors::green << "  [+] Attachments ready: "
+                  << attachmentStats.stickers << " stickers, "
+                  << attachmentStats.patches << " patches, "
+                  << attachmentStats.keychains << " keychains, "
+                  << attachmentStats.duplicatesRemoved << " duplicates removed"
+                  << colors::reset << "\n";
+        std::wcout << colors::gray << L"      cache : "
+                   << attachmentStats.outputPath.wstring()
+                   << colors::reset << L"\n";
+    }
+    else
+    {
+        std::cout << colors::yellow
+                  << "  [!] Could not build the real attachment catalog. Sticker/patch/charm selection will fail closed.\n"
+                  << colors::reset;
+    }
+
+    // 4. Inject Payload DLL
+'@
+Replace-Required $injectAnchor $attachmentBuild 'attachment catalog build route'
 
 # The generated translation unit is the source of truth for the binary. Refuse
 # to build if a future edit reintroduces the launch flag anywhere outside the
@@ -60,4 +99,4 @@ if ($outputDirectory) {
     New-Item -ItemType Directory -Path $outputDirectory -Force | Out-Null
 }
 Set-Content -LiteralPath $OutputPath -Value $source -Encoding UTF8
-Write-Host "Generated secure loader source (no -insecure launch flag): $OutputPath"
+Write-Host "Generated secure loader source with real cosmetics/attachment catalogs: $OutputPath"
