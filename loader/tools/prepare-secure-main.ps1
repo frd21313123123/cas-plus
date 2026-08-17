@@ -21,6 +21,23 @@ $catalogOutput = Join-Path $outputDirectory 'game_catalog.prefab.h'
 $catalogFix = Join-Path $PSScriptRoot 'fix-game-catalog-prefabs.ps1'
 & $catalogFix -InputPath $catalogInput -OutputPath $catalogOutput
 
+# attachment_catalog.h normally includes game_catalog.h. Generate a matching
+# build-local copy so the translation unit sees only the prefab-aware catalog
+# definitions and never includes both source/header variants simultaneously.
+$attachmentInput = Join-Path $PSScriptRoot '..\src\attachment_catalog.h'
+$attachmentOutput = Join-Path $outputDirectory 'attachment_catalog.prefab.h'
+$attachmentSource = Get-Content -LiteralPath $attachmentInput -Raw -Encoding UTF8
+$attachmentNeedle = '#include "game_catalog.h"'
+$attachmentCount = ([regex]::Matches($attachmentSource,
+    [regex]::Escape($attachmentNeedle))).Count
+if ($attachmentCount -ne 1) {
+    throw "Attachment-catalog include anchor expected once, found $attachmentCount."
+}
+$attachmentSource = $attachmentSource.Replace($attachmentNeedle,
+    '#include "game_catalog.prefab.h"')
+Set-Content -LiteralPath $attachmentOutput -Value $attachmentSource -Encoding UTF8 -NoNewline
+Write-Host "Generated prefab-aware attachment catalog parser: $attachmentOutput"
+
 $source = Get-Content -LiteralPath $InputPath -Raw -Encoding UTF8
 
 function Replace-Required([string]$Needle, [string]$Replacement, [string]$Name) {
@@ -59,11 +76,8 @@ $newLaunchStatus = 'without -insecure (-dx11 ...)'
 Replace-Required $oldLaunchStatus $newLaunchStatus 'secure launch status'
 
 $includeAnchor = '#include "game_catalog.h"'
-$includeReplacement = @'
-#include "game_catalog.prefab.h"
-#include "attachment_catalog.h"
-'@
-Replace-Required $includeAnchor $includeReplacement.TrimEnd() 'prefab-aware + attachment catalog includes'
+$includeReplacement = '#include "attachment_catalog.prefab.h"'
+Replace-Required $includeAnchor $includeReplacement 'prefab-aware catalog include'
 
 $injectAnchor = @'
     // 4. Inject Payload DLL
