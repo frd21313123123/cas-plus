@@ -38,6 +38,19 @@ static unsigned int g_inventoryGameCatalogCount = 0;
 static unsigned int g_inventoryGameCatalogChecksum = 0;
 static bool g_inventoryGameCatalogLoaded = false;
 static bool g_inventoryGameCatalogLoadAttempted = false;
+static unsigned int g_inventoryGameCatalogLoadFailures = 0;
+static unsigned int g_inventoryGameCatalogLastStatus = 0;
+
+enum InventoryGameCatalogLoadStatus : unsigned int {
+    INVENTORY_GAME_CATALOG_STATUS_NONE = 0,
+    INVENTORY_GAME_CATALOG_STATUS_OK = 1,
+    INVENTORY_GAME_CATALOG_STATUS_PATH = 2,
+    INVENTORY_GAME_CATALOG_STATUS_OPEN = 3,
+    INVENTORY_GAME_CATALOG_STATUS_HEADER = 4,
+    INVENTORY_GAME_CATALOG_STATUS_ALLOC = 5,
+    INVENTORY_GAME_CATALOG_STATUS_RECORDS = 6,
+    INVENTORY_GAME_CATALOG_STATUS_CHECKSUM = 7
+};
 
 static unsigned int InventoryGameCatalogChecksum(
     const InventoryGameCatalogRecord* records, unsigned int count)
@@ -83,20 +96,32 @@ static void ShutdownInventoryGameCatalog()
     g_inventoryGameCatalogLoaded = false;
 }
 
+static bool InventoryGameCatalogFail(unsigned int status)
+{
+    g_inventoryGameCatalogLoaded = false;
+    g_inventoryGameCatalogLastStatus = status;
+    ++g_inventoryGameCatalogLoadFailures;
+    return false;
+}
+
 static bool LoadInventoryGameCatalog()
 {
-    if (g_inventoryGameCatalogLoadAttempted)
-        return g_inventoryGameCatalogLoaded;
+    // Do not permanently cache a failed first read. The loader writes the
+    // sidecar immediately before injection, but manual-map startup and temp-file
+    // visibility can still race. Browse exposes an explicit Reload action too.
+    if (g_inventoryGameCatalogLoaded && g_inventoryGameCatalog &&
+        g_inventoryGameCatalogCount > 0)
+        return true;
     g_inventoryGameCatalogLoadAttempted = true;
 
     wchar_t path[512]{};
     if (!InventoryGameCatalogPath(path,
         static_cast<DWORD>(sizeof(path) / sizeof(path[0]))))
-        return false;
+        return InventoryGameCatalogFail(INVENTORY_GAME_CATALOG_STATUS_PATH);
     HANDLE file = CreateFileW(path, CAS_GENERIC_READ, CAS_FILE_SHARE_READ,
         nullptr, CAS_OPEN_EXISTING, CAS_FILE_ATTRIBUTE_NORMAL, nullptr);
     if (file == CAS_INVALID_HANDLE_VALUE)
-        return false;
+        return InventoryGameCatalogFail(INVENTORY_GAME_CATALOG_STATUS_OPEN);
 
     InventoryGameCatalogHeader header{};
     DWORD read = 0;
@@ -109,7 +134,7 @@ static bool LoadInventoryGameCatalog()
         header.count > INVENTORY_GAME_CATALOG_MAX_RECORDS)
     {
         CloseHandle(file);
-        return false;
+        return InventoryGameCatalogFail(INVENTORY_GAME_CATALOG_STATUS_HEADER);
     }
 
     const SIZE_T bytes = static_cast<SIZE_T>(header.count) *
@@ -121,31 +146,64 @@ static bool LoadInventoryGameCatalog()
     if (!records)
     {
         CloseHandle(file);
-        return false;
+        return InventoryGameCatalogFail(INVENTORY_GAME_CATALOG_STATUS_ALLOC);
     }
 
     DWORD recordBytes = 0;
     const BOOL ok = ReadFile(file, records, static_cast<DWORD>(bytes),
         &recordBytes, nullptr);
     CloseHandle(file);
-    if (!ok || recordBytes != bytes ||
-        InventoryGameCatalogChecksum(records, header.count) != header.checksum)
+    if (!ok || recordBytes != bytes)
     {
         VirtualFree(records, 0, INVENTORY_GAME_MEM_RELEASE);
-        return false;
+        return InventoryGameCatalogFail(INVENTORY_GAME_CATALOG_STATUS_RECORDS);
+    }
+    if (InventoryGameCatalogChecksum(records, header.count) != header.checksum)
+    {
+        VirtualFree(records, 0, INVENTORY_GAME_MEM_RELEASE);
+        return InventoryGameCatalogFail(INVENTORY_GAME_CATALOG_STATUS_CHECKSUM);
     }
 
+    if (g_inventoryGameCatalog)
+        VirtualFree(g_inventoryGameCatalog, 0, INVENTORY_GAME_MEM_RELEASE);
     g_inventoryGameCatalog = records;
     g_inventoryGameCatalogCount = header.count;
     g_inventoryGameCatalogChecksum = header.checksum;
     g_inventoryGameCatalogLoaded = true;
+    g_inventoryGameCatalogLastStatus = INVENTORY_GAME_CATALOG_STATUS_OK;
     return true;
+}
+
+static bool ReloadInventoryGameCatalog()
+{
+    ShutdownInventoryGameCatalog();
+    return LoadInventoryGameCatalog();
 }
 
 static bool InventoryGameCatalogReady()
 {
     return g_inventoryGameCatalogLoaded && g_inventoryGameCatalog &&
         g_inventoryGameCatalogCount > 0;
+}
+
+static unsigned int InventoryGameCatalogTotalCount()
+{
+    return InventoryGameCatalogReady() ? g_inventoryGameCatalogCount : 0;
+}
+
+static bool InventoryGameCatalogLoadWasAttempted()
+{
+    return g_inventoryGameCatalogLoadAttempted;
+}
+
+static unsigned int InventoryGameCatalogLoadFailureCount()
+{
+    return g_inventoryGameCatalogLoadFailures;
+}
+
+static unsigned int InventoryGameCatalogLastLoadStatus()
+{
+    return g_inventoryGameCatalogLastStatus;
 }
 
 static const InventoryGameCatalogRecord* InventoryGameCatalogAt(
