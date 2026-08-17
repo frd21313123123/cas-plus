@@ -196,8 +196,6 @@ $generatedVisualBackend = $targetRegistry + "`r`n" + $targetCollector + "`r`n" +
     $meshBackend + "`r`n" + $diagnostics + "`r`n" + $newPipeline + "`r`n"
 $source = $source.Substring(0, $start) + $generatedVisualBackend + $source.Substring($end)
 
-# Discovery can start early, but expensive/one-shot render backend resolution
-# happens only after the entity/schema/local lifecycle is fully validated.
 $updateStartAnchor = @'
 static int UpdateBotHighlights(BotHighlightStats* stats)
 {
@@ -223,31 +221,15 @@ $runtimeReplacement = @'
         return BOT_HIGHLIGHT_ERR_RUNTIME;
     }
 '@
-if (-not $source.Contains($runtimeAnchor)) { throw 'Entity-runtime failure anchor was not found. Refusing to patch blindly.' }
+if (-not $source.Contains($runtimeAnchor)) { throw 'Visual runtime early-return anchor was not found. Refusing to patch blindly.' }
 $source = $source.Replace($runtimeAnchor, $runtimeReplacement)
 
-$schemaAnchor = @'
-        if (!clientModule ||
-            !ResolveBotHighlightRuntime(clientModule, &resolved))
-            return BOT_HIGHLIGHT_ERR_SCHEMA;
-'@
-$schemaReplacement = @'
-        if (!clientModule ||
-            !ResolveBotHighlightRuntime(clientModule, &resolved))
-        {
-            ResetVisualTargets();
-            return BOT_HIGHLIGHT_ERR_SCHEMA;
-        }
-'@
-if (-not $source.Contains($schemaAnchor)) { throw 'Schema failure anchor was not found. Refusing to patch blindly.' }
-$source = $source.Replace($schemaAnchor, $schemaReplacement)
-
-$mapAnchor = @'
+$entitySystemAnchor = @'
     void* entitySystem = CurrentEntitySystem(g_botHighlightRuntime.entity);
     if (!entitySystem)
         return BOT_HIGHLIGHT_WAITING_MAP;
 '@
-$mapReplacement = @'
+$entitySystemReplacement = @'
     void* entitySystem = CurrentEntitySystem(g_botHighlightRuntime.entity);
     if (!entitySystem)
     {
@@ -255,96 +237,81 @@ $mapReplacement = @'
         return BOT_HIGHLIGHT_WAITING_MAP;
     }
 '@
-if (-not $source.Contains($mapAnchor)) { throw 'Map wait anchor was not found. Refusing to patch blindly.' }
-$source = $source.Replace($mapAnchor, $mapReplacement)
+if (-not $source.Contains($entitySystemAnchor)) { throw 'Visual entity-system early-return anchor was not found. Refusing to patch blindly.' }
+$source = $source.Replace($entitySystemAnchor, $entitySystemReplacement)
 
-$targetApplyAnchor = @'
-        if (stats)
-            ++stats->botCandidates;
+$enemyLoopTail = @'
         if (ApplyBotHighlight(g_botHighlightRuntime, *pawnHandle, pawn) &&
             stats)
             ++stats->highlighted;
+    }
+
+    ApplyActiveWeaponChams(g_botHighlightRuntime, entitySystem, localPawn);
 '@
-$targetApplyReplacement = @'
-        if (stats)
-            ++stats->botCandidates;
-        AddEnemyVisualTarget(*pawnHandle);
+$enemyLoopTailReplacement = @'
         if (ApplyBotHighlight(g_botHighlightRuntime, *pawnHandle, pawn) &&
             stats)
             ++stats->highlighted;
-'@
-if (-not $source.Contains($targetApplyAnchor)) { throw 'Enemy visual-target publication anchor was not found. Refusing to patch blindly.' }
-$source = $source.Replace($targetApplyAnchor, $targetApplyReplacement)
+    }
 
-$publishAnchor = @'
-    ApplyActiveWeaponChams(g_botHighlightRuntime, entitySystem, localPawn);
-
-    int destination = 0;
-'@
-$publishReplacement = @'
-    CollectSupplementalVisualTargets(g_botHighlightRuntime, entitySystem,
-        controllers, controllerCount, localController, localPawn, localTeam);
-    ApplyActiveWeaponChams(g_botHighlightRuntime, entitySystem, localPawn);
+    CollectExtendedVisualTargets(g_botHighlightRuntime, entitySystem,
+        localController, localPawn, localHandle, localTeam);
     PublishVisualTargets();
 
-    int destination = 0;
+    ApplyActiveWeaponChams(g_botHighlightRuntime, entitySystem, localPawn);
 '@
-if (-not $source.Contains($publishAnchor)) { throw 'Visual-target publish anchor was not found. Refusing to patch blindly.' }
-$source = $source.Replace($publishAnchor, $publishReplacement)
+if (-not $source.Contains($enemyLoopTail)) { throw 'Visual target publication anchor was not found. Refusing to patch blindly.' }
+$source = $source.Replace($enemyLoopTail, $enemyLoopTailReplacement)
 
-$oldTeamFallback = @'
-    if (localTeam < 2 || localTeam > 3)
-    {
-        localTeam = 3; // Fallback CT team so T enemies (team 2) are highlighted
-    }
-'@
-$newTeamFallback = @'
-    if (localTeam < 2 || localTeam > 3)
-    {
-        ResetVisualTargets();
-        RestoreAllBotHighlights(stats);
-        return BOT_HIGHLIGHT_WAITING_LOCAL;
-    }
-'@
-if (-not $source.Contains($oldTeamFallback)) { throw 'Local-team fallback anchor was not found. Refusing to patch blindly.' }
-$source = $source.Replace($oldTeamFallback, $newTeamFallback)
-
-$localIdentityAnchor = @'
+# Current payload has no separate disabled-state branch inside UpdateBotHighlights;
+# FrameStage owns enable/disable dispatch. Map/runtime exits above reset the table,
+# and the local-player exit below publishes the empty build generation.
+$localReadyAnchor = @'
     if (!localIdentity || localHandle == 0xFFFFFFFFu)
     {
         RestoreAllBotHighlights(stats);
         return BOT_HIGHLIGHT_WAITING_LOCAL;
     }
+
 '@
-$localIdentityReplacement = @'
+$localReadyReplacement = @'
     if (!localIdentity || localHandle == 0xFFFFFFFFu)
     {
-        ResetVisualTargets();
         RestoreAllBotHighlights(stats);
+        PublishVisualTargets();
         return BOT_HIGHLIGHT_WAITING_LOCAL;
     }
-'@
-if (-not $source.Contains($localIdentityAnchor)) { throw 'Local identity wait anchor was not found. Refusing to patch blindly.' }
-$source = $source.Replace($localIdentityAnchor, $localIdentityReplacement)
 
-$backendReadyAnchor = @'
-    g_lastLocalController = localController;
-    g_lastLocalControllerIdentity = localIdentity;
-    g_lastLocalControllerHandle = localHandle;
-'@
-$backendReadyReplacement = @'
-    g_lastLocalController = localController;
-    g_lastLocalControllerIdentity = localIdentity;
-    g_lastLocalControllerHandle = localHandle;
+    if (g_espConfig.chams && g_espConfig.chamsStyle != 3)
+    {
+        if (InstallMeshRenderBackend())
+            EnsureSelectedChamsMaterialsReady();
+    }
 
-    // At this point Schema, entity system, local team and full local controller
-    // identity are all valid. Only now consume one-shot renderer resolution.
-    InstallMeshRenderBackend();
-    EnsureMaterialManagerReady();
 '@
-if (-not $source.Contains($backendReadyAnchor)) { throw 'Renderer runtime-ready anchor was not found. Refusing to patch blindly.' }
-$source = $source.Replace($backendReadyAnchor, $backendReadyReplacement)
+if (-not $source.Contains($localReadyAnchor)) { throw 'Mesh backend install lifecycle anchor was not found. Refusing to patch blindly.' }
+$source = $source.Replace($localReadyAnchor, $localReadyReplacement)
 
+$oldTargetToggle = @'
+    DrawToggleSwitch(hdc, 390, 175, cfg.chamsEnemies);
+    RECT eRc = { 435, 175, 540, 195 };
+    DrawTextW(hdc, L"Enemy Pawns", -1, &eRc, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+
+    DrawToggleSwitch(hdc, 390, 205, false);
+    RECT hRc = { 435, 205, 550, 225 };
+    SetTextColor(hdc, RGB_COLOR(113, 113, 122));
+    DrawTextW(hdc, L"Hands (schema N/A)", -1, &hRc, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    SetTextColor(hdc, RGB_COLOR(228, 228, 231));
+
+    DrawToggleSwitch(hdc, 390, 235, cfg.chamsWeapons);
+    RECT wRc = { 435, 235, 540, 255 };
+    DrawTextW(hdc, L"Weapons", -1, &wRc, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+'@
+if ($source.Contains($oldTargetToggle)) { $source = $source.Replace($oldTargetToggle, '') }
+
+# Remove the old per-frame human-controlled-pawn scratch pass. The typed target
+# collector already works from the validated controller list and this pass was
+# otherwise pure overhead.
 $oldBotBookkeeping = @'
     unsigned int humanControlledPawns[kControllerSlotLimit];
     ZeroBytes(humanControlledPawns, sizeof(humanControlledPawns));
@@ -364,7 +331,7 @@ $oldBotBookkeeping = @'
     }
 
 '@
-if (-not $source.Contains($oldBotBookkeeping)) { throw 'Stale bot bookkeeping anchor was not found. Refusing to patch blindly.' }
+if (-not $source.Contains($oldBotBookkeeping)) { throw 'Current bot bookkeeping anchor was not found. Refusing to patch blindly.' }
 $source = $source.Replace($oldBotBookkeeping, '')
 
 $modalSizeAnchor = 'DrawRoundedCard(hdc, 220, 110, 340, 270, RGB_COLOR(28, 28, 34), RGB_COLOR(60, 60, 70), 8);'
@@ -505,3 +472,6 @@ $outputDirectory = Split-Path -Parent $OutputPath
 if ($outputDirectory) { New-Item -ItemType Directory -Path $outputDirectory -Force | Out-Null }
 Set-Content -LiteralPath $OutputPath -Value $source -Encoding UTF8 -NoNewline
 Write-Host "Generated modular visual render-pipeline source: $OutputPath"
+
+$hotPathFix = Join-Path $PSScriptRoot 'apply-visual-hotpath-fix.ps1'
+& $hotPathFix -InputPath $OutputPath
