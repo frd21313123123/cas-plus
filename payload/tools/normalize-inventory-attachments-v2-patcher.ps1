@@ -49,5 +49,49 @@ $preciseSlotLoop = '$slotLoopAnchor = @' + $q + $nl +
 Replace-ExactOnce $ambiguousSlotLoop $preciseSlotLoop `
     'unique Sticker V2 slot loop'
 
+# apply-inventory-game-catalog already extended InventoryExtendedLoad, and
+# apply-inventory-local-ops already extended the worker flush block. Rewrite the
+# Attachment V2 patcher's expected/replacement bodies so it composes with that
+# final generated lifecycle rather than reverting either existing layer.
+$oldLoadAnchorBody = '    LoadInventoryStickerStore();' + $nl +
+    '    InventoryInstallTextCapture();'
+$newLoadAnchorBody = '    LoadInventoryStickerStore();' + $nl +
+    '    LoadInventoryGameCatalog();' + $nl +
+    '    InventoryGameCatalogSanitizeLoadedStore();' + $nl +
+    '    InventoryInstallTextCapture();'
+Replace-ExactOnce $oldLoadAnchorBody $newLoadAnchorBody `
+    'game-catalog-aware attachment load anchor'
+
+$oldLoadReplacementBody = '    LoadInventoryAttachmentCatalog();' + $nl +
+    '    LoadInventoryStickerStore();' + $nl +
+    '    LoadInventoryKeychainStore();' + $nl +
+    '    InventoryInstallTextCapture();'
+$newLoadReplacementBody = '    LoadInventoryAttachmentCatalog();' + $nl +
+    '    LoadInventoryStickerStore();' + $nl +
+    '    LoadInventoryGameCatalog();' + $nl +
+    '    InventoryGameCatalogSanitizeLoadedStore();' + $nl +
+    '    LoadInventoryKeychainStore();' + $nl +
+    '    InventoryInstallTextCapture();'
+Replace-ExactOnce $oldLoadReplacementBody $newLoadReplacementBody `
+    'game-catalog-preserving attachment load replacement'
+
+$oldFlushAnchorBody = '        FlushInventoryStickerPersistenceIfNeeded();' + $nl +
+    '        Sleep(8);'
+$newFlushAnchorBody = '        FlushInventoryStickerPersistenceIfNeeded();' + $nl +
+    '        FlushInventoryGroupPersistenceIfNeeded();' + $nl +
+    '        Sleep(8);'
+Replace-ExactOnce $oldFlushAnchorBody $newFlushAnchorBody `
+    'group-aware keychain flush anchor'
+
+$oldFlushReplacementBody = '        FlushInventoryStickerPersistenceIfNeeded();' + $nl +
+    '        FlushInventoryKeychainPersistenceIfNeeded();' + $nl +
+    '        Sleep(8);'
+$newFlushReplacementBody = '        FlushInventoryStickerPersistenceIfNeeded();' + $nl +
+    '        FlushInventoryKeychainPersistenceIfNeeded();' + $nl +
+    '        FlushInventoryGroupPersistenceIfNeeded();' + $nl +
+    '        Sleep(8);'
+Replace-ExactOnce $oldFlushReplacementBody $newFlushReplacementBody `
+    'group-preserving keychain flush replacement'
+
 Set-Content -LiteralPath $patcher -Value $source -Encoding UTF8 -NoNewline
 Write-Host 'Normalized Inventory Attachments V2 patcher anchors for current generated source.'
