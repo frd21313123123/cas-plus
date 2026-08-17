@@ -5,3 +5,5 @@ Current CS2 base item records such as weapon_deagle reference named prefabs for 
 Ordinary weapon paint records are no longer discarded merely because a model path is unavailable: an existing live weapon entity already owns its view/world model. Definition-changing knife/glove/agent records remain fail-closed when no real game model can be resolved.
 
 This fixes empty Browse categories such as Inventory -> Pistols when the installed items_game uses prefab-backed weapon metadata.
+
+Release CI validates the generated prefab-aware header together with the secure loader source.
