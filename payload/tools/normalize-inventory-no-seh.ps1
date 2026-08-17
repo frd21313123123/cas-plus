@@ -35,6 +35,7 @@ $uiInteractionVisualsV2 = Join-Path $PSScriptRoot 'apply-ui-interaction-visuals-
 $uiInventoryTooltipsV3 = Join-Path $PSScriptRoot 'apply-ui-inventory-tooltips-v3.ps1'
 $gameCatalog = Join-Path $PSScriptRoot 'apply-inventory-game-catalog.ps1'
 $gameCatalogOrder = Join-Path $PSScriptRoot 'normalize-inventory-game-catalog-order.ps1'
+$gameCatalogRuntimeFix = Join-Path $PSScriptRoot 'fix-inventory-game-catalog-runtime.ps1'
 $attachmentsPatcherNormalize = Join-Path $PSScriptRoot 'normalize-inventory-attachments-v2-patcher.ps1'
 $attachmentsV2 = Join-Path $PSScriptRoot 'apply-inventory-attachments-v2.ps1'
 
@@ -49,5 +50,6 @@ $attachmentsV2 = Join-Path $PSScriptRoot 'apply-inventory-attachments-v2.ps1'
 & $uiInventoryTooltipsV3 -InputPath $InputPath
 & $gameCatalog -InputPath $InputPath
 & $gameCatalogOrder -InputPath $InputPath
+& $gameCatalogRuntimeFix -InputPath $InputPath
 & $attachmentsPatcherNormalize
 & $attachmentsV2 -InputPath $InputPath
