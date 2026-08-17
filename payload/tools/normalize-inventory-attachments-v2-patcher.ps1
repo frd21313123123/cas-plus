@@ -16,14 +16,15 @@ $shortCoreInsert = @'
 Insert-BeforeRequired 'static void InventoryExtendedOnItemDeleted(unsigned long long itemId)' `
     $core 'attachment catalog/keychain core'
 '@
-$preciseCoreInsert = @'
-$coreInsertAnchor = @'
-static void InventoryExtendedOnItemDeleted(unsigned long long itemId)
-{
-    if (!itemId || !InventoryStickerTryLock())
-'@
-Insert-BeforeRequired $coreInsertAnchor $core 'attachment catalog/keychain core'
-'@
+$q = [char]39
+$nl = "`r`n"
+$preciseCoreInsert = '$coreInsertAnchor = @' + $q + $nl +
+    'static void InventoryExtendedOnItemDeleted(unsigned long long itemId)' + $nl +
+    '{' + $nl +
+    '    if (!itemId || !InventoryStickerTryLock())' + $nl +
+    $q + '@' + $nl +
+    'Insert-BeforeRequired $coreInsertAnchor $core ' + $q +
+    'attachment catalog/keychain core' + $q
 Replace-ExactOnce $shortCoreInsert $preciseCoreInsert `
     'definition-vs-forward-declaration core insert'
 
@@ -33,19 +34,18 @@ Replace-Required `
     '    for (int i = 0; i < attachmentLimit; ++i)' `
     'Sticker V2 visible slot count'
 '@
-$preciseSlotLoop = @'
-$slotLoopAnchor = @'
-    CasUiDrawLabel(hdc, L"SLOTS", 280, 178, 100, 18,
-        CAS_UI_MUTED_2, 10, 650, DT_LEFT);
-    for (int i = 0; i < INVENTORY_STICKER_SLOT_COUNT; ++i)
-'@
-$slotLoopReplacement = @'
-    CasUiDrawLabel(hdc, L"SLOTS", 280, 178, 100, 18,
-        CAS_UI_MUTED_2, 10, 650, DT_LEFT);
-    for (int i = 0; i < attachmentLimit; ++i)
-'@
-Replace-Required $slotLoopAnchor $slotLoopReplacement 'Sticker V2 visible slot count'
-'@
+$preciseSlotLoop = '$slotLoopAnchor = @' + $q + $nl +
+    '    CasUiDrawLabel(hdc, L"SLOTS", 280, 178, 100, 18,' + $nl +
+    '        CAS_UI_MUTED_2, 10, 650, DT_LEFT);' + $nl +
+    '    for (int i = 0; i < INVENTORY_STICKER_SLOT_COUNT; ++i)' + $nl +
+    $q + '@' + $nl +
+    '$slotLoopReplacement = @' + $q + $nl +
+    '    CasUiDrawLabel(hdc, L"SLOTS", 280, 178, 100, 18,' + $nl +
+    '        CAS_UI_MUTED_2, 10, 650, DT_LEFT);' + $nl +
+    '    for (int i = 0; i < attachmentLimit; ++i)' + $nl +
+    $q + '@' + $nl +
+    'Replace-Required $slotLoopAnchor $slotLoopReplacement ' + $q +
+    'Sticker V2 visible slot count' + $q
 Replace-ExactOnce $ambiguousSlotLoop $preciseSlotLoop `
     'unique Sticker V2 slot loop'
 
