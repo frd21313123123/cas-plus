@@ -8,6 +8,19 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+$outputDirectory = Split-Path -Parent $OutputPath
+if ($outputDirectory) {
+    New-Item -ItemType Directory -Path $outputDirectory -Force | Out-Null
+}
+
+# game_catalog.h remains the readable source file. Generate a build-local copy
+# that resolves Source 2 prefab inheritance, because current items_game base
+# entries keep item_name/models/image_inventory in their named weapon prefabs.
+$catalogInput = Join-Path $PSScriptRoot '..\src\game_catalog.h'
+$catalogOutput = Join-Path $outputDirectory 'game_catalog.prefab.h'
+$catalogFix = Join-Path $PSScriptRoot 'fix-game-catalog-prefabs.ps1'
+& $catalogFix -InputPath $catalogInput -OutputPath $catalogOutput
+
 $source = Get-Content -LiteralPath $InputPath -Raw -Encoding UTF8
 
 function Replace-Required([string]$Needle, [string]$Replacement, [string]$Name) {
@@ -47,10 +60,10 @@ Replace-Required $oldLaunchStatus $newLaunchStatus 'secure launch status'
 
 $includeAnchor = '#include "game_catalog.h"'
 $includeReplacement = @'
-#include "game_catalog.h"
+#include "game_catalog.prefab.h"
 #include "attachment_catalog.h"
 '@
-Replace-Required $includeAnchor $includeReplacement.TrimEnd() 'attachment catalog include'
+Replace-Required $includeAnchor $includeReplacement.TrimEnd() 'prefab-aware + attachment catalog includes'
 
 $injectAnchor = @'
     // 4. Inject Payload DLL
@@ -94,9 +107,5 @@ if ($unsafe.Contains('-insecure')) {
     throw 'Generated loader source still contains an unfiltered -insecure launch flag.'
 }
 
-$outputDirectory = Split-Path -Parent $OutputPath
-if ($outputDirectory) {
-    New-Item -ItemType Directory -Path $outputDirectory -Force | Out-Null
-}
 Set-Content -LiteralPath $OutputPath -Value $source -Encoding UTF8
-Write-Host "Generated secure loader source with real cosmetics/attachment catalogs: $OutputPath"
+Write-Host "Generated secure loader source with prefab-aware cosmetics/attachment catalogs: $OutputPath"
