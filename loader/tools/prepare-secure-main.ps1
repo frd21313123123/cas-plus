@@ -21,6 +21,15 @@ $catalogOutput = Join-Path $outputDirectory 'game_catalog.prefab.h'
 $catalogFix = Join-Path $PSScriptRoot 'fix-game-catalog-prefabs.ps1'
 & $catalogFix -InputPath $catalogInput -OutputPath $catalogOutput
 
+# The installed pak01_dir.vpk can be far larger than the directory tree. Stream
+# only the header/tree and normalize generated Panorama icon wrappers before the
+# catalog is compiled into Loader. These are mandatory stages: silently skipping
+# either one can leave Inventory Browse with a valid UI but no sidecar records.
+$catalogVpkFix = Join-Path $PSScriptRoot 'fix-game-catalog-vpk-io.ps1'
+& $catalogVpkFix -InputPath $catalogOutput
+$catalogIconFix = Join-Path $PSScriptRoot 'fix-game-catalog-icon-compat.ps1'
+& $catalogIconFix -InputPath $catalogOutput
+
 # attachment_catalog.h normally includes game_catalog.h. Generate a matching
 # build-local copy so the translation unit sees only the prefab-aware catalog
 # definitions and never includes both source/header variants simultaneously.
@@ -122,4 +131,4 @@ if ($unsafe.Contains('-insecure')) {
 }
 
 Set-Content -LiteralPath $OutputPath -Value $source -Encoding UTF8
-Write-Host "Generated secure loader source with prefab-aware cosmetics/attachment catalogs: $OutputPath"
+Write-Host "Generated secure loader source with prefab/VPK/icon-aware cosmetics catalogs: $OutputPath"
