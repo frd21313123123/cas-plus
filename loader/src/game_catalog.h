@@ -4,10 +4,15 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
+#include <cwchar>
+#include <cwctype>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
+#include <iterator>
+#include <limits>
 #include <sstream>
 #include <string>
 #include <unordered_map>
@@ -20,7 +25,7 @@ namespace cas_catalog
 namespace fs = std::filesystem;
 
 constexpr std::uint32_t kCatalogMagic = 0x31434743u; // CGC1
-constexpr std::uint16_t kCatalogVersion = 1;
+constexpr std::uint16_t kCatalogVersion = 3;
 constexpr std::size_t kMaxCatalogRecords = 8192;
 
 #pragma pack(push, 1)
@@ -33,6 +38,9 @@ struct GameCatalogRecord
     wchar_t displayName[80];
     wchar_t weaponName[48];
     wchar_t finishName[64];
+    // Exact rarity token from this installed game's paint_kits entry.  It is
+    // deliberately carried as data rather than inferred from a paint-kit ID.
+    char rarity[32];
     char iconResource[160];
     char modelPlayer[160];
     char modelWorld[160];
@@ -45,6 +53,9 @@ struct GameCatalogHeader
     std::uint16_t recordSize;
     std::uint32_t count;
     std::uint32_t checksum;
+    std::uint32_t processId;
+    std::uint64_t processCreated;
+    std::uint32_t schemaChecksum;
 };
 #pragma pack(pop)
 
@@ -56,6 +67,7 @@ struct CatalogBuildStats
     std::size_t records = 0;
     std::size_t duplicatesRemoved = 0;
     std::size_t missingIconAssets = 0;
+    std::size_t ambiguousPairs = 0;
     bool usedVpk = false;
     bool localized = false;
     fs::path gameRoot;
@@ -95,7 +107,7 @@ inline bool readWholeFile(const fs::path& path, std::vector<std::uint8_t>& out)
     stream.seekg(0, std::ios::beg);
     out.resize(static_cast<std::size_t>(size));
     stream.read(reinterpret_cast<char*>(out.data()), size);
-    return stream.good() || stream.eof();
+    return stream.gcount() == size;
 }
 
 inline std::uint16_t readU16(const std::vector<std::uint8_t>& bytes, std::size_t offset)
@@ -145,6 +157,7 @@ public:
 
         std::size_t cursor = headerSize_;
         const std::size_t treeEnd = headerSize_ + treeSize_;
+        std::unordered_map<std::string, Entry> parsedEntries;
         while (cursor < treeEnd)
         {
             std::string extension;
@@ -181,10 +194,11 @@ public:
                     if (!directory.empty()) full = directory + "/";
                     full += filename;
                     if (!extension.empty()) full += "." + extension;
-                    entries_.emplace(normalizePath(full), entry);
+                    parsedEntries.emplace(normalizePath(full), entry);
                 }
             }
         }
+        entries_ = std::move(parsedEntries);
         return !entries_.empty();
     }
 
@@ -202,6 +216,11 @@ public:
             return false;
         const Entry& entry = found->second;
         out.clear();
+        // Catalog text/resources do not justify allocating an arbitrary length
+        // from a corrupt VPK entry. Validate bounds before reserve/resize.
+        if (static_cast<std::uint64_t>(entry.preloadBytes) + entry.length >
+            128ull * 1024ull * 1024ull)
+            return false;
         out.reserve(static_cast<std::size_t>(entry.preloadBytes) + entry.length);
         if (entry.preloadBytes)
         {
@@ -223,6 +242,11 @@ public:
 
         std::ifstream stream(dataPath, std::ios::binary);
         if (!stream)
+            return false;
+        stream.seekg(0, std::ios::end);
+        const std::streamoff fileSize = stream.tellg();
+        if (fileSize < 0 || absoluteOffset > static_cast<std::uint64_t>(fileSize) ||
+            entry.length > static_cast<std::uint64_t>(fileSize) - absoluteOffset)
             return false;
         stream.seekg(static_cast<std::streamoff>(absoluteOffset), std::ios::beg);
         if (!stream)
@@ -308,7 +332,8 @@ public:
                 }
                 else token.push_back(ch);
             }
-            return !token.empty();
+            valid_ = false;
+            return false;
         }
         while (pos_ < text_.size())
         {
@@ -320,6 +345,8 @@ public:
         }
         return !token.empty();
     }
+
+    bool valid() const { return valid_; }
 
 private:
     void skipSpaceAndComments()
@@ -341,22 +368,25 @@ private:
 
     const std::string& text_;
     std::size_t pos_ = 0;
+    bool valid_ = true;
 };
 
-inline bool parseKvObject(KvTokenizer& tokenizer, std::vector<KvNode>& output, bool stopAtBrace)
+inline bool parseKvObject(KvTokenizer& tokenizer, std::vector<KvNode>& output,
+    bool stopAtBrace, unsigned int depth = 0)
 {
+    if (depth > 64) return false;
     std::string key;
     while (tokenizer.next(key))
     {
         if (key == "}") return stopAtBrace;
-        if (key == "{") continue;
+        if (key == "{") return false;
         std::string next;
         if (!tokenizer.next(next)) return false;
         KvNode node{};
         node.key = key;
         if (next == "{")
         {
-            if (!parseKvObject(tokenizer, node.children, true)) return false;
+            if (!parseKvObject(tokenizer, node.children, true, depth + 1)) return false;
         }
         else if (next != "}")
             node.value = next;
@@ -364,11 +394,12 @@ inline bool parseKvObject(KvTokenizer& tokenizer, std::vector<KvNode>& output, b
             return false;
         output.push_back(std::move(node));
     }
-    return !stopAtBrace;
+    return !stopAtBrace && tokenizer.valid();
 }
 
 inline bool parseKeyValues(const std::vector<std::uint8_t>& bytes, KvNode& root)
 {
+    if (bytes.empty()) return false;
     std::string text(reinterpret_cast<const char*>(bytes.data()), bytes.size());
     if (text.size() >= 3 && static_cast<unsigned char>(text[0]) == 0xEF &&
         static_cast<unsigned char>(text[1]) == 0xBB &&
@@ -406,9 +437,17 @@ inline std::string childValue(const KvNode& node, const std::string& key)
 inline int parseInteger(const std::string& text, int fallback = -1)
 {
     if (text.empty()) return fallback;
-    char* end = nullptr;
-    const long value = std::strtol(text.c_str(), &end, 10);
-    if (!end || end == text.c_str()) return fallback;
+    // Schema IDs are decimal tokens, not permissive strtol prefixes such as
+    // "7junk" or overflowing values that silently alias a valid definition.
+    unsigned int value = 0;
+    for (const char ch : text)
+    {
+        if (ch < '0' || ch > '9') return fallback;
+        const unsigned int digit = static_cast<unsigned int>(ch - '0');
+        if (value > (static_cast<unsigned int>((std::numeric_limits<int>::max)()) - digit) / 10u)
+            return fallback;
+        value = value * 10u + digit;
+    }
     return static_cast<int>(value);
 }
 
@@ -587,6 +626,7 @@ inline bool readGameFile(const fs::path& csgoRoot, const VpkDirectory& vpk,
 inline std::string chooseIconResource(const VpkDirectory& vpk, const std::string& logical,
     std::size_t* missingCounter)
 {
+    if (logical.empty()) return {};
     const std::string first = "panorama/images/" + logical + "_png.vtex_c";
     if (!vpk.valid() || vpk.hasFile(first)) return first;
     const std::string second = "panorama/images/" + logical + ".vtex_c";
@@ -609,13 +649,39 @@ inline std::uint32_t checksumRecords(const GameCatalogRecord* records, std::size
     return hash;
 }
 
-inline bool writeCatalog(const std::vector<GameCatalogRecord>& records, fs::path& outputPath)
+inline std::uint32_t checksumBytes(const std::vector<std::uint8_t>& bytes)
 {
+    std::uint32_t hash = 2166136261u;
+    for (const std::uint8_t byte : bytes)
+    {
+        hash ^= byte;
+        hash *= 16777619u;
+    }
+    return hash;
+}
+
+inline std::uint64_t processCreationTime(DWORD pid)
+{
+    HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+    if (!process) return 0;
+    FILETIME created{}, exited{}, kernel{}, user{};
+    const BOOL ok = GetProcessTimes(process, &created, &exited, &kernel, &user);
+    CloseHandle(process);
+    return ok ? (static_cast<std::uint64_t>(created.dwHighDateTime) << 32) |
+        created.dwLowDateTime : 0;
+}
+
+inline bool writeCatalog(const std::vector<GameCatalogRecord>& records, fs::path& outputPath,
+    DWORD processId, std::uint64_t processCreated, std::uint32_t schemaChecksum)
+{
+    if (records.empty() || records.size() > kMaxCatalogRecords || !processId || !processCreated)
+        return false;
     wchar_t tempPath[MAX_PATH]{};
     const DWORD length = GetTempPathW(MAX_PATH, tempPath);
     if (!length || length >= MAX_PATH) return false;
-    outputPath = fs::path(tempPath) / L"cas_plus_game_catalog_v1.bin";
-    const fs::path staging = outputPath.wstring() + L".tmp";
+    outputPath = fs::path(tempPath) / L"cas_plus_game_catalog_v2.bin";
+    const fs::path staging = outputPath.wstring() + L"." +
+        std::to_wstring(GetCurrentProcessId()) + L".tmp";
 
     GameCatalogHeader header{};
     header.magic = kCatalogMagic;
@@ -623,6 +689,9 @@ inline bool writeCatalog(const std::vector<GameCatalogRecord>& records, fs::path
     header.recordSize = static_cast<std::uint16_t>(sizeof(GameCatalogRecord));
     header.count = static_cast<std::uint32_t>(records.size());
     header.checksum = checksumRecords(records.data(), records.size());
+    header.processId = processId;
+    header.processCreated = processCreated;
+    header.schemaChecksum = schemaChecksum;
 
     std::ofstream stream(staging, std::ios::binary | std::ios::trunc);
     if (!stream) return false;
@@ -636,25 +705,13 @@ inline bool writeCatalog(const std::vector<GameCatalogRecord>& records, fs::path
         MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH) != FALSE;
 }
 
-inline bool buildFromRunningGame(DWORD pid, CatalogBuildStats* stats = nullptr)
+// Pure schema projection shared by production and offline regression fixtures.
+// It never opens a process, rewrites inventory entries, or creates guessed pairs.
+inline bool buildCatalogRecords(const KvNode& root, const VpkDirectory& vpk,
+    const std::unordered_map<std::wstring, std::wstring>& localization,
+    std::vector<GameCatalogRecord>& records, CatalogBuildStats& localStats)
 {
-    CatalogBuildStats localStats{};
-    localStats.gameRoot = gameRootFromProcess(pid);
-    if (localStats.gameRoot.empty())
-        return false;
-    const fs::path csgoRoot = localStats.gameRoot / L"csgo";
-    if (!fs::exists(csgoRoot))
-        return false;
-
-    VpkDirectory vpk;
-    localStats.usedVpk = vpk.open(csgoRoot / L"pak01_dir.vpk");
-
-    std::vector<std::uint8_t> itemsBytes;
-    if (!readGameFile(csgoRoot, vpk, "scripts/items/items_game.txt", itemsBytes))
-        return false;
-    KvNode root{};
-    if (!parseKeyValues(itemsBytes, root))
-        return false;
+    records.clear();
     const KvNode* itemsGame = findRecursive(root, "items_game");
     if (!itemsGame) itemsGame = &root;
     const KvNode* items = findChild(*itemsGame, "items");
@@ -662,19 +719,6 @@ inline bool buildFromRunningGame(DWORD pid, CatalogBuildStats* stats = nullptr)
     const KvNode* alternateIcons = findChild(*itemsGame, "alternate_icons2");
     if (!items || !paintKits || !alternateIcons)
         return false;
-
-    std::vector<std::uint8_t> localizationBytes;
-    const LANGID language = GetUserDefaultUILanguage();
-    const bool wantsRussian = PRIMARYLANGID(language) == LANG_RUSSIAN;
-    std::unordered_map<std::wstring, std::wstring> localization;
-    if (readGameFile(csgoRoot, vpk,
-        wantsRussian ? "resource/csgo_russian.txt" : "resource/csgo_english.txt",
-        localizationBytes) ||
-        readGameFile(csgoRoot, vpk, "resource/csgo_english.txt", localizationBytes))
-    {
-        localization = parseLocalization(localizationBytes);
-        localStats.localized = !localization.empty();
-    }
 
     struct ItemInfo
     {
@@ -694,10 +738,12 @@ inline bool buildFromRunningGame(DWORD pid, CatalogBuildStats* stats = nullptr)
         int id = 0;
         std::string internal;
         std::string descriptionToken;
+        std::string rarity;
     };
 
     std::vector<ItemInfo> itemInfos;
     std::unordered_map<std::string, PaintInfo> paints;
+    std::unordered_set<std::string> ambiguousPaintNames;
     itemInfos.reserve(items->children.size());
     for (const KvNode& block : items->children)
     {
@@ -729,12 +775,18 @@ inline bool buildFromRunningGame(DWORD pid, CatalogBuildStats* stats = nullptr)
     for (const KvNode& block : paintKits->children)
     {
         const int id = parseInteger(block.key, -1);
-        if (id <= 0) continue;
+        if (id <= 0 || id > 100000) continue;
         PaintInfo paint{};
         paint.id = id;
         paint.internal = lowerAscii(childValue(block, "name"));
         paint.descriptionToken = childValue(block, "description_tag");
-        if (!paint.internal.empty()) paints[paint.internal] = std::move(paint);
+        paint.rarity = lowerAscii(childValue(block, "rarity"));
+        if (paint.internal.empty()) continue;
+        const auto existing = paints.find(paint.internal);
+        if (existing != paints.end() && existing->second.id != paint.id)
+            ambiguousPaintNames.insert(paint.internal);
+        else
+            paints.emplace(paint.internal, std::move(paint));
     }
     localStats.paintKits = paints.size();
 
@@ -762,12 +814,12 @@ inline bool buildFromRunningGame(DWORD pid, CatalogBuildStats* stats = nullptr)
         return a->internal.size() > b->internal.size();
     });
 
-    std::vector<GameCatalogRecord> records;
     records.reserve((std::min)(iconPaths.size() + itemInfos.size(), kMaxCatalogRecords));
     std::unordered_set<std::uint64_t> seen;
 
     auto appendRecord = [&](const ItemInfo& item, int paintKit,
-        const std::wstring& finish, const std::string& iconLogical) {
+        const std::wstring& finish, const std::string& rarity,
+        const std::string& iconLogical) {
         if (records.size() >= kMaxCatalogRecords) return;
         const std::uint64_t key = (static_cast<std::uint64_t>(
             static_cast<std::uint16_t>(item.definition)) << 32) |
@@ -779,6 +831,16 @@ inline bool buildFromRunningGame(DWORD pid, CatalogBuildStats* stats = nullptr)
         }
         // A skin without a model is not useful to the in-match projection path.
         if (item.modelPlayer.empty() && item.modelWorld.empty()) return;
+
+        // Truncated resource paths can resolve a wrong/nonexistent asset. Keep
+        // labels display-limited, but never truncate a resource used by runtime.
+        const std::string icon = chooseIconResource(vpk, iconLogical,
+            &localStats.missingIconAssets);
+        if (item.modelPlayer.size() >= sizeof(GameCatalogRecord::modelPlayer) ||
+            item.modelWorld.size() >= sizeof(GameCatalogRecord::modelWorld) ||
+            rarity.size() >= sizeof(GameCatalogRecord::rarity) ||
+            icon.size() >= sizeof(GameCatalogRecord::iconResource))
+            return;
 
         GameCatalogRecord record{};
         record.definitionIndex = static_cast<std::uint16_t>(item.definition);
@@ -795,8 +857,9 @@ inline bool buildFromRunningGame(DWORD pid, CatalogBuildStats* stats = nullptr)
         copyWide(record.displayName, std::size(record.displayName), display);
         copyWide(record.weaponName, std::size(record.weaponName), weapon);
         copyWide(record.finishName, std::size(record.finishName), finish);
+        copyAscii(record.rarity, std::size(record.rarity), rarity);
         copyAscii(record.iconResource, std::size(record.iconResource),
-            chooseIconResource(vpk, iconLogical, &localStats.missingIconAssets));
+            icon);
         copyAscii(record.modelPlayer, std::size(record.modelPlayer), item.modelPlayer);
         copyAscii(record.modelWorld, std::size(record.modelWorld), item.modelWorld);
         records.push_back(record);
@@ -815,34 +878,48 @@ inline bool buildFromRunningGame(DWORD pid, CatalogBuildStats* stats = nullptr)
         core.resize(core.size() - suffix.size());
 
         const ItemInfo* item = nullptr;
-        std::string paintInternal;
+        const PaintInfo* paint = nullptr;
+        bool ambiguous = false;
         for (const ItemInfo* candidate : paintable)
         {
             const std::string weaponPrefix = lowerAscii(candidate->internal) + "_";
             if (core.rfind(weaponPrefix, 0) == 0)
             {
+                const std::string paintInternal = core.substr(weaponPrefix.size());
+                const auto paintFound = paints.find(paintInternal);
+                if (paintFound == paints.end() || ambiguousPaintNames.count(paintInternal))
+                    continue;
+                // Prefix overlap is not proof of compatibility: both the full
+                // weapon name and the full paint name must match unambiguously.
+                if (item && (item->definition != candidate->definition ||
+                    paint->id != paintFound->second.id))
+                {
+                    ambiguous = true;
+                    break;
+                }
                 item = candidate;
-                paintInternal = core.substr(weaponPrefix.size());
-                break;
+                paint = &paintFound->second;
             }
         }
-        if (!item) continue;
-        const auto paintFound = paints.find(lowerAscii(paintInternal));
-        if (paintFound == paints.end()) continue;
-        const PaintInfo& paint = paintFound->second;
-        const std::wstring finish = localize(paint.descriptionToken,
-            localization, paint.internal);
-        appendRecord(*item, paint.id, finish, logical);
+        if (ambiguous) ++localStats.ambiguousPairs;
+        if (!item || !paint || ambiguous) continue;
+        const std::wstring finish = localize(paint->descriptionToken,
+            localization, paint->internal);
+        appendRecord(*item, paint->id, finish, paint->rarity, logical);
     }
 
-    // Agents are standalone item definitions rather than paint-kit pairs.
+    // Default finish is an explicit definition-backed record, never an alias
+    // for the first painted skin. Agents are standalone definition records too.
     for (const ItemInfo& item : itemInfos)
     {
-        if (item.category != 9) continue;
+        if (item.category < 1 || item.category > 9) continue;
         std::string icon = normalizePath(item.imageInventory);
-        if (!icon.empty() && icon.rfind("econ/", 0) != 0)
+        if (item.category == 9 && !icon.empty() && icon.rfind("econ/", 0) != 0)
             icon = "econ/characters/" + icon;
-        appendRecord(item, 0, L"", icon);
+        // Cosmetic glove definitions have no purchasable default finish.
+        // Only standalone agents, weapons and knives expose paint-kit zero.
+        if (item.category == 8) continue;
+        appendRecord(item, 0, L"", "", icon);
     }
 
     std::sort(records.begin(), records.end(), [](const GameCatalogRecord& a,
@@ -858,7 +935,42 @@ inline bool buildFromRunningGame(DWORD pid, CatalogBuildStats* stats = nullptr)
     });
 
     localStats.records = records.size();
-    if (records.empty() || !writeCatalog(records, localStats.outputPath))
+    return !records.empty();
+}
+
+inline bool buildFromRunningGame(DWORD pid, CatalogBuildStats* stats = nullptr)
+{
+    CatalogBuildStats localStats{};
+    localStats.gameRoot = gameRootFromProcess(pid);
+    const std::uint64_t created = processCreationTime(pid);
+    if (localStats.gameRoot.empty() || !created)
+        return false;
+    const fs::path csgoRoot = localStats.gameRoot / L"csgo";
+    if (!fs::exists(csgoRoot))
+        return false;
+    VpkDirectory vpk;
+    localStats.usedVpk = vpk.open(csgoRoot / L"pak01_dir.vpk");
+    std::vector<std::uint8_t> itemsBytes;
+    if (!readGameFile(csgoRoot, vpk, "scripts/items/items_game.txt", itemsBytes))
+        return false;
+    KvNode root{};
+    if (!parseKeyValues(itemsBytes, root))
+        return false;
+
+    std::vector<std::uint8_t> localizationBytes;
+    std::unordered_map<std::wstring, std::wstring> localization;
+    // Keep English as a per-token fallback when a localized update is partial.
+    if (readGameFile(csgoRoot, vpk, "resource/csgo_english.txt", localizationBytes))
+        localization = parseLocalization(localizationBytes);
+    if (PRIMARYLANGID(GetUserDefaultUILanguage()) == LANG_RUSSIAN &&
+        readGameFile(csgoRoot, vpk, "resource/csgo_russian.txt", localizationBytes))
+        for (const auto& entry : parseLocalization(localizationBytes))
+            localization[entry.first] = entry.second;
+    localStats.localized = !localization.empty();
+
+    std::vector<GameCatalogRecord> records;
+    if (!buildCatalogRecords(root, vpk, localization, records, localStats) ||
+        !writeCatalog(records, localStats.outputPath, pid, created, checksumBytes(itemsBytes)))
         return false;
     if (stats) *stats = localStats;
     return true;

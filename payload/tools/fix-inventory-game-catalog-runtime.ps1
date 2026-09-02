@@ -15,17 +15,17 @@ function Replace-Required([string]$Needle, [string]$Replacement, [string]$Name) 
 }
 
 $forwardAnchor = @'
+static bool InventoryEconBindItemView(BYTE* view, unsigned long long virtualItemId);
 static bool InventoryGameCatalogReady();
-static int InventoryGameCatalogCyclePaint(unsigned short definitionIndex,
 '@
 $forwardReplacement = @'
+static bool InventoryEconBindItemView(BYTE* view, unsigned long long virtualItemId);
 static bool InventoryGameCatalogReady();
 static bool ReloadInventoryGameCatalog();
 static unsigned int InventoryGameCatalogTotalCount();
 static bool InventoryGameCatalogLoadWasAttempted();
 static unsigned int InventoryGameCatalogLoadFailureCount();
 static unsigned int InventoryGameCatalogLastLoadStatus();
-static int InventoryGameCatalogCyclePaint(unsigned short definitionIndex,
 '@
 Replace-Required $forwardAnchor $forwardReplacement 'catalog diagnostic forward declarations'
 
@@ -95,7 +95,7 @@ $drawReplacement = @'
 
         CasUiDrawLabel(hdc,
             InventoryGameCatalogLoadWasAttempted() ?
-                L"The payload tried to load %TEMP%\\cas_plus_game_catalog_v1.bin." :
+                L"The payload tried to load %TEMP%\\cas_plus_game_catalog_v2.bin." :
                 L"The payload has not attempted to read the game catalog yet.",
             CAS_UI_CONTENT_X + 24, 222, 690, 22,
             CAS_UI_MUTED_2, 11, 400, DT_LEFT);

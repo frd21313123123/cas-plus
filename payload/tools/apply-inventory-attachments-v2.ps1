@@ -1,4 +1,4 @@
-param(
+﻿param(
     [Parameter(Mandatory = $true)]
     [string]$InputPath
 )
@@ -38,8 +38,12 @@ function Insert-BeforeRequired([string]$Anchor, [string]$Block, [string]$Name) {
 # Core state must exist before the extended delete/duplicate lifecycle and before
 # InventoryEconApplyAttributes. The compact ops layer depends on
 # InventorySelectedItemId, so it is placed immediately after that helper.
-Insert-BeforeRequired 'static void InventoryExtendedOnItemDeleted(unsigned long long itemId)' `
-    $core 'attachment catalog/keychain core'
+$coreInsertAnchor = @'
+static void InventoryExtendedOnItemDeleted(unsigned long long itemId)
+{
+    if (!itemId || !InventoryStickerTryLock())
+'@
+Insert-BeforeRequired $coreInsertAnchor $core 'attachment catalog/keychain core'
 Insert-BeforeRequired 'static bool InventoryMutateSelectedSticker(' `
     $ops 'real sticker/patch operations'
 
@@ -319,6 +323,8 @@ $loadAnchor = @'
 static void InventoryExtendedLoad()
 {
     LoadInventoryStickerStore();
+    LoadInventoryGameCatalog();
+    InventoryGameCatalogSanitizeLoadedStore();
     InventoryInstallTextCapture();
 }
 '@
@@ -327,6 +333,8 @@ static void InventoryExtendedLoad()
 {
     LoadInventoryAttachmentCatalog();
     LoadInventoryStickerStore();
+    LoadInventoryGameCatalog();
+    InventoryGameCatalogSanitizeLoadedStore();
     LoadInventoryKeychainStore();
     InventoryInstallTextCapture();
 }
@@ -335,11 +343,13 @@ Replace-Required $loadAnchor $loadReplacement 'attachment/keychain load'
 
 $flushAnchor = @'
         FlushInventoryStickerPersistenceIfNeeded();
+        FlushInventoryGroupPersistenceIfNeeded();
         Sleep(8);
 '@
 $flushReplacement = @'
         FlushInventoryStickerPersistenceIfNeeded();
         FlushInventoryKeychainPersistenceIfNeeded();
+        FlushInventoryGroupPersistenceIfNeeded();
         Sleep(8);
 '@
 Replace-Required $flushAnchor $flushReplacement 'keychain persistence worker flush'
@@ -468,10 +478,17 @@ Replace-Required `
     '    CasUiDrawLabel(hdc, L"Sticker editor", 280, 112, 240, 28,' `
     '    CasUiDrawLabel(hdc, patchMode ? L"Patch editor" : L"Sticker editor", 280, 112, 240, 28,' `
     'Sticker V2 title'
-Replace-Required `
-    '    for (int i = 0; i < INVENTORY_STICKER_SLOT_COUNT; ++i)' `
-    '    for (int i = 0; i < attachmentLimit; ++i)' `
-    'Sticker V2 visible slot count'
+$slotLoopAnchor = @'
+    CasUiDrawLabel(hdc, L"SLOTS", 280, 178, 100, 18,
+        CAS_UI_MUTED_2, 10, 650, DT_LEFT);
+    for (int i = 0; i < INVENTORY_STICKER_SLOT_COUNT; ++i)
+'@
+$slotLoopReplacement = @'
+    CasUiDrawLabel(hdc, L"SLOTS", 280, 178, 100, 18,
+        CAS_UI_MUTED_2, 10, 650, DT_LEFT);
+    for (int i = 0; i < attachmentLimit; ++i)
+'@
+Replace-Required $slotLoopAnchor $slotLoopReplacement 'Sticker V2 visible slot count'
 Replace-Required `
     '    CasUiDrawEditorSection(hdc, 280, 246, 574, 96, L"STICKER");' `
     '    CasUiDrawEditorSection(hdc, 280, 246, 574, 96, patchMode ? L"PATCH" : L"STICKER");' `

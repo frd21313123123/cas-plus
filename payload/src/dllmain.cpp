@@ -3594,7 +3594,10 @@ static LRESULT CALLBACK MenuWindowProc(HWND wnd, UINT msg, WPARAM wParam, LPARAM
     return DefWindowProcW(wnd, msg, wParam, lParam);
 }
 
-static HWND CreateMenuWindow(HINSTANCE, HWND owner)
+// The menu belongs to CS2's client window.  It is deliberately a child HWND,
+// not an owned top-level popup: it has no taskbar/Alt+Tab presence and uses
+// the game's client coordinate system.
+static HWND CreateMenuWindow(HINSTANCE, HWND gameWindow)
 {
     HINSTANCE exeInstance = GetModuleHandleW(nullptr);
     static const wchar_t kClassName[] = L"CasPlusOfflineVisualsMenu441";
@@ -3608,28 +3611,29 @@ static HWND CreateMenuWindow(HINSTANCE, HWND owner)
 
     constexpr int kWidth = 780;
     constexpr int kHeight = 500;
-    HWND wnd = CreateWindowExW(WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE, kClassName, L"CAS v2.3 - ESP Settings & Interactive Preview",
-        WS_POPUP | WS_BORDER, 0, 0, kWidth, kHeight, owner, nullptr, exeInstance, nullptr);
+    HWND wnd = CreateWindowExW(WS_EX_NOACTIVATE, kClassName,
+        L"CAS in-game menu", WS_CHILD | WS_BORDER, 0, 0, kWidth, kHeight,
+        gameWindow, nullptr, exeInstance, nullptr);
     return wnd;
 }
 
-static bool PositionMenuOverGame()
+static bool PositionMenuInGameClient()
 {
     if (!g_gameWindow || !g_menuWindow)
         return false;
     RECT client{};
     if (!GetClientRect(g_gameWindow, &client))
         return false;
-    POINT origin{};
-    if (!ClientToScreen(g_gameWindow, &origin))
-        return false;
     constexpr int kWidth = 780;
     constexpr int kHeight = 500;
     const int width = static_cast<int>(client.right - client.left);
     const int height = static_cast<int>(client.bottom - client.top);
-    const int x = origin.x + ((width > kWidth) ? (width - kWidth) / 2 : 0);
-    const int y = origin.y + ((height > kHeight) ? (height - kHeight) / 2 : 0);
-    return SetWindowPos(g_menuWindow, reinterpret_cast<HWND>(static_cast<LONG_PTR>(-1)), x, y, kWidth, kHeight, SWP_NOSIZE | SWP_NOACTIVATE | 0x0040) != 0;
+    const int x = width > kWidth ? (width - kWidth) / 2 : 0;
+    const int y = height > kHeight ? (height - kHeight) / 2 : 0;
+    // HWND_TOP orders only among CS2 child windows; unlike HWND_TOPMOST it
+    // cannot escape the game's Z-order or appear as a separate desktop UI.
+    return SetWindowPos(g_menuWindow, HWND_TOP, x, y, kWidth, kHeight,
+        SWP_NOSIZE | SWP_NOACTIVATE) != 0;
 }
 
 static DWORD WINAPI PayloadThread(LPVOID parameter)
@@ -3651,7 +3655,7 @@ static DWORD WINAPI PayloadThread(LPVOID parameter)
         SetSkyboxStatus(L"Sky: failed to install the frame-stage bridge.");
         SetBotStatus(L"Bots: failed to install the frame-stage bridge.");
     }
-    PositionMenuOverGame();
+    PositionMenuInGameClient();
     MessageBeep(0x00000040UL);
 
 #ifdef POTATO_DIAGNOSTIC
@@ -3680,7 +3684,7 @@ static DWORD WINAPI PayloadThread(LPVOID parameter)
         {
             if (!g_menuActuallyShown)
             {
-                PositionMenuOverGame();
+                PositionMenuInGameClient();
                 ShowWindow(g_menuWindow, SW_SHOWNA);
                 UpdateWindow(g_menuWindow);
                 g_menuActuallyShown = true;
@@ -3690,7 +3694,7 @@ static DWORD WINAPI PayloadThread(LPVOID parameter)
             // window-manager traffic. Re-center roughly four times per second.
             if (++positionTicks >= 31)
             {
-                PositionMenuOverGame();
+                PositionMenuInGameClient();
                 positionTicks = 0;
             }
         }
@@ -3707,7 +3711,7 @@ static DWORD WINAPI PayloadThread(LPVOID parameter)
 
 extern "C" __declspec(dllexport) unsigned int WINAPI PotatoPayloadVersion()
 {
-    return 0x00040401u;
+    return 0x00040402u;
 }
 
 extern "C" BOOL WINAPI DllMain(HMODULE module, DWORD reason, LPVOID)

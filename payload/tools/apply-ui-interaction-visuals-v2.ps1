@@ -4,7 +4,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$source = Get-Content -LiteralPath $InputPath -Raw -Encoding UTF8
+$script:source = (Get-Content -LiteralPath $InputPath -Raw -Encoding UTF8).Replace("`r`n", "`n").Replace("`n", "`r`n")
 $preludePath = Join-Path $PSScriptRoot '..\src\ui\ui_interaction_v3_prelude.inc'
 $visualsPath = Join-Path $PSScriptRoot '..\src\ui\ui_visuals_v2.inc'
 if (-not (Test-Path -LiteralPath $preludePath)) {
@@ -13,46 +13,48 @@ if (-not (Test-Path -LiteralPath $preludePath)) {
 if (-not (Test-Path -LiteralPath $visualsPath)) {
     throw "Visuals V2 module was not found: $visualsPath"
 }
-$prelude = Get-Content -LiteralPath $preludePath -Raw -Encoding UTF8
-$visuals = Get-Content -LiteralPath $visualsPath -Raw -Encoding UTF8
+$prelude = (Get-Content -LiteralPath $preludePath -Raw -Encoding UTF8).Replace("`r`n", "`n").Replace("`n", "`r`n")
+$visuals = (Get-Content -LiteralPath $visualsPath -Raw -Encoding UTF8).Replace("`r`n", "`n").Replace("`n", "`r`n")
 
 function Replace-Required([string]$Needle, [string]$Replacement, [string]$Name) {
-    $count = ([regex]::Matches($script:source, [regex]::Escape($Needle))).Count
+    $n = $Needle.Replace("`r`n", "`n").Replace("`n", "`r`n")
+    $count = ([regex]::Matches($script:source, [regex]::Escape($n))).Count
     if ($count -ne 1) {
         throw "UI interaction anchor '$Name' expected exactly once, found $count. Refusing to patch blindly."
     }
-    $script:source = $script:source.Replace($Needle, $Replacement)
+    $script:source = $script:source.Replace($n, $Replacement.Replace("`r`n", "`n").Replace("`n", "`r`n"))
 }
 
 function Replace-RequiredCount([string]$Needle, [string]$Replacement,
     [string]$Name, [int]$Expected) {
-    $count = ([regex]::Matches($script:source, [regex]::Escape($Needle))).Count
+    $n = $Needle.Replace("`r`n", "`n").Replace("`n", "`r`n")
+    $count = ([regex]::Matches($script:source, [regex]::Escape($n))).Count
     if ($count -ne $Expected) {
         throw "UI interaction anchor '$Name' expected $Expected times, found $count. Refusing to patch blindly."
     }
-    $script:source = $script:source.Replace($Needle, $Replacement)
+    $script:source = $script:source.Replace($n, $Replacement.Replace("`r`n", "`n").Replace("`n", "`r`n"))
 }
 
 # Mouse globals/helpers must be visible to ui_redesign.inc's primitive controls.
 $uiMarker = '// cas+ unified menu redesign.'
-$uiMarkerCount = ([regex]::Matches($source, [regex]::Escape($uiMarker))).Count
+$uiMarkerCount = ([regex]::Matches($script:source, [regex]::Escape($uiMarker))).Count
 if ($uiMarkerCount -ne 1) {
     throw "UI interaction redesign marker expected once, found $uiMarkerCount."
 }
-$uiMarkerIndex = $source.IndexOf($uiMarker)
-$source = $source.Substring(0, $uiMarkerIndex) + $prelude + "`r`n`r`n" +
-    $source.Substring($uiMarkerIndex)
+$uiMarkerIndex = $script:source.IndexOf($uiMarker)
+$script:source = $script:source.Substring(0, $uiMarkerIndex) + $prelude + "`r`n`r`n" +
+    $script:source.Substring($uiMarkerIndex)
 
 # The Visuals module depends on the shared cas+ drawing primitives and is
 # therefore injected after redesign/editor/sticker helpers and before WndProc.
 $menuAnchor = 'static LRESULT CALLBACK MenuWindowProc(HWND wnd, UINT msg, WPARAM wParam, LPARAM lParam)'
-$menuCount = ([regex]::Matches($source, [regex]::Escape($menuAnchor))).Count
+$menuCount = ([regex]::Matches($script:source, [regex]::Escape($menuAnchor))).Count
 if ($menuCount -ne 1) {
     throw "UI interaction MenuWindowProc anchor expected once, found $menuCount."
 }
-$menuIndex = $source.IndexOf($menuAnchor)
-$source = $source.Substring(0, $menuIndex) + $visuals + "`r`n`r`n" +
-    $source.Substring($menuIndex)
+$menuIndex = $script:source.IndexOf($menuAnchor)
+$script:source = $script:source.Substring(0, $menuIndex) + $visuals + "`r`n`r`n" +
+    $script:source.Substring($menuIndex)
 
 # Shared buttons gain hover + pressed feedback without changing any caller or
 # feature mutation function.
@@ -303,5 +305,5 @@ $mouseDownReplacement = @'
 '@
 Replace-Required $mouseDownAnchor $mouseDownReplacement.TrimEnd() 'menu pressed-state tracking'
 
-Set-Content -LiteralPath $InputPath -Value $source -Encoding UTF8
+Set-Content -LiteralPath $InputPath -Value $script:source -Encoding UTF8
 Write-Host "Applied shared hover/tooltips + native Visuals V2 page: $InputPath"

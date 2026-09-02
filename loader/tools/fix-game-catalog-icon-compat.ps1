@@ -42,24 +42,20 @@ $collectReplacement = @'
     {
         const KvNode* node = stack.back();
         stack.pop_back();
-        for (const KvNode& child : node->children)
+        const std::string keyLower = lowerAscii(node->key);
+        if (keyLower == "icon_path" && !node->value.empty())
+            iconPaths.push_back(node->value);
+        else
         {
-            const std::string keyLower = lowerAscii(child.key);
-            if (keyLower == "icon_path" && !child.value.empty())
-                iconPaths.push_back(child.value);
-            else
-            {
-                const std::string keyPath = normalizePath(child.key);
-                const std::string valuePath = normalizePath(child.value);
-                if (keyPath.find("econ/default_generated/") != std::string::npos)
-                    iconPaths.push_back(child.key);
-                if (!child.value.empty() &&
-                    valuePath.find("econ/default_generated/") != std::string::npos)
-                    iconPaths.push_back(child.value);
-            }
-            for (const KvNode& nested : child.children)
-                stack.push_back(&nested);
+            if (normalizePath(node->key).find("econ/default_generated/") != std::string::npos)
+                iconPaths.push_back(node->key);
+            if (normalizePath(node->value).find("econ/default_generated/") != std::string::npos)
+                iconPaths.push_back(node->value);
         }
+        // Visit every depth; the old grandchild-only traversal skipped icon
+        // objects when Valve introduced an additional grouping level.
+        for (const KvNode& child : node->children)
+            stack.push_back(&child);
     }
 '@
 Replace-Required $collectAnchor $collectReplacement 'alternate_icons2 candidate collection'
@@ -74,10 +70,11 @@ $parseAnchor = @'
 $parseReplacement = @'
         std::string logical = normalizePath(iconOriginal);
         const std::string prefix = "econ/default_generated/";
-        const std::size_t generatedOffset = logical.find(prefix);
-        if (generatedOffset == std::string::npos)
+        const std::string panoramaPrefix = "panorama/images/";
+        if (logical.rfind(panoramaPrefix, 0) == 0)
+            logical.erase(0, panoramaPrefix.size());
+        if (logical.rfind(prefix, 0) != 0)
             continue;
-        logical = logical.substr(generatedOffset);
 
         const std::string compiledSuffix = ".vtex_c";
         if (logical.size() > compiledSuffix.size() &&
