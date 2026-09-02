@@ -4,32 +4,33 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$source = Get-Content -LiteralPath $InputPath -Raw -Encoding UTF8
+$script:source = (Get-Content -LiteralPath $InputPath -Raw -Encoding UTF8).Replace("`r`n", "`n").Replace("`n", "`r`n")
 $modulePath = Join-Path $PSScriptRoot '..\src\ui\ui_inventory_sticker_v2.inc'
 if (-not (Test-Path -LiteralPath $modulePath)) {
     throw "Sticker V2 module was not found: $modulePath"
 }
-$module = Get-Content -LiteralPath $modulePath -Raw -Encoding UTF8
+$module = (Get-Content -LiteralPath $modulePath -Raw -Encoding UTF8).Replace("`r`n", "`n").Replace("`n", "`r`n")
 
 function Replace-Required([string]$Needle, [string]$Replacement, [string]$Name) {
-    $count = ([regex]::Matches($script:source, [regex]::Escape($Needle))).Count
+    $n = $Needle.Replace("`r`n", "`n").Replace("`n", "`r`n")
+    $count = ([regex]::Matches($script:source, [regex]::Escape($n))).Count
     if ($count -ne 1) {
         throw "Sticker V2 anchor '$Name' expected exactly once, found $count. Refusing to patch blindly."
     }
-    $script:source = $script:source.Replace($Needle, $Replacement)
+    $script:source = $script:source.Replace($n, $Replacement.Replace("`r`n", "`n").Replace("`n", "`r`n"))
 }
 
 # ui_redesign.inc/editor V2 have already been injected by apply-ui-redesign.ps1.
 # Put the sticker overlay after them and before MenuWindowProc so it can reuse
 # the shared cas+ UI primitives while its functions are visible to the proc.
 $menuAnchor = 'static LRESULT CALLBACK MenuWindowProc(HWND wnd, UINT msg, WPARAM wParam, LPARAM lParam)'
-$menuCount = ([regex]::Matches($source, [regex]::Escape($menuAnchor))).Count
+$menuCount = ([regex]::Matches($script:source, [regex]::Escape($menuAnchor))).Count
 if ($menuCount -ne 1) {
     throw "Sticker V2 MenuWindowProc anchor expected once, found $menuCount."
 }
-$menuIndex = $source.IndexOf($menuAnchor)
-$source = $source.Substring(0, $menuIndex) + $module + "`r`n`r`n" +
-    $source.Substring($menuIndex)
+$menuIndex = $script:source.IndexOf($menuAnchor)
+$script:source = $script:source.Substring(0, $menuIndex) + $module + "`r`n`r`n" +
+    $script:source.Substring($menuIndex)
 
 # The extended inventory stage still emits its old sticker draw helper. Keep it
 # compiled as a rollback aid, but route the active overlay to the redesigned one.
@@ -62,5 +63,5 @@ $routerReplacement = @'
 '@
 Replace-Required $routerAnchor $routerReplacement 'sticker modal input ownership'
 
-Set-Content -LiteralPath $InputPath -Value $source -Encoding UTF8
+Set-Content -LiteralPath $InputPath -Value $script:source -Encoding UTF8
 Write-Host "Applied redesigned Inventory sticker modal: $InputPath"

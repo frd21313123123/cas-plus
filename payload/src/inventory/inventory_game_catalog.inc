@@ -4,7 +4,7 @@
 // payload only consumes that snapshot; it never invents weapon/paint/model pairs.
 
 constexpr unsigned int INVENTORY_GAME_CATALOG_MAGIC = 0x31434743u; // CGC1
-constexpr unsigned short INVENTORY_GAME_CATALOG_VERSION = 1;
+constexpr unsigned short INVENTORY_GAME_CATALOG_VERSION = 2;
 constexpr unsigned int INVENTORY_GAME_CATALOG_MAX_RECORDS = 8192u;
 constexpr DWORD INVENTORY_GAME_MEM_COMMIT_RESERVE = 0x3000u;
 constexpr DWORD INVENTORY_GAME_MEM_RELEASE = 0x8000u;
@@ -30,6 +30,9 @@ struct InventoryGameCatalogHeader {
     unsigned short recordSize;
     unsigned int count;
     unsigned int checksum;
+    unsigned int processId;
+    unsigned long long processCreated;
+    unsigned int schemaChecksum;
 };
 #pragma pack(pop)
 
@@ -40,6 +43,7 @@ static bool g_inventoryGameCatalogLoaded = false;
 static bool g_inventoryGameCatalogLoadAttempted = false;
 static unsigned int g_inventoryGameCatalogLoadFailures = 0;
 static unsigned int g_inventoryGameCatalogLastStatus = 0;
+static volatile LONG g_inventoryGameCatalogLoadRequested = 0;
 
 enum InventoryGameCatalogLoadStatus : unsigned int {
     INVENTORY_GAME_CATALOG_STATUS_NONE = 0,
@@ -49,7 +53,9 @@ enum InventoryGameCatalogLoadStatus : unsigned int {
     INVENTORY_GAME_CATALOG_STATUS_HEADER = 4,
     INVENTORY_GAME_CATALOG_STATUS_ALLOC = 5,
     INVENTORY_GAME_CATALOG_STATUS_RECORDS = 6,
-    INVENTORY_GAME_CATALOG_STATUS_CHECKSUM = 7
+    INVENTORY_GAME_CATALOG_STATUS_CHECKSUM = 7,
+    INVENTORY_GAME_CATALOG_STATUS_STALE = 8,
+    INVENTORY_GAME_CATALOG_STATUS_CONTENT = 9
 };
 
 static unsigned int InventoryGameCatalogChecksum(
@@ -76,7 +82,7 @@ static bool InventoryGameCatalogPath(wchar_t* path, DWORD capacity)
     DWORD length = GetTempPathW(capacity, path);
     if (length == 0 || length >= capacity)
         return false;
-    static const wchar_t suffix[] = L"cas_plus_game_catalog_v1.bin";
+    static const wchar_t suffix[] = L"cas_plus_game_catalog_v2.bin";
     DWORD suffixLength = 0;
     while (suffix[suffixLength]) ++suffixLength;
     if (length + suffixLength + 1 >= capacity)
@@ -88,6 +94,9 @@ static bool InventoryGameCatalogPath(wchar_t* path, DWORD capacity)
 
 static void ShutdownInventoryGameCatalog()
 {
+    // Caller must stop/join catalog readers and the IO worker first. Published
+    // records are otherwise immutable for the lifetime of this payload.
+    AtomicExchange(&g_inventoryGameCatalogLoadRequested, 0);
     if (g_inventoryGameCatalog)
         VirtualFree(g_inventoryGameCatalog, 0, INVENTORY_GAME_MEM_RELEASE);
     g_inventoryGameCatalog = nullptr;
@@ -104,13 +113,57 @@ static bool InventoryGameCatalogFail(unsigned int status)
     return false;
 }
 
+template <typename Character, SIZE_T N>
+static bool InventoryGameCatalogTerminated(const Character (&text)[N])
+{
+    for (SIZE_T i = 0; i < N; ++i)
+        if (!text[i]) return true;
+    return false;
+}
+
+static bool InventoryGameCatalogValidRecords(
+    const InventoryGameCatalogRecord* records, unsigned int count)
+{
+    for (unsigned int i = 0; i < count; ++i)
+    {
+        const InventoryGameCatalogRecord& record = records[i];
+        if (!record.definitionIndex || record.category < 1 || record.category > 9 ||
+            record.teamMask < 1 || record.teamMask > 3 ||
+            record.paintKit < 0 || record.paintKit > 100000 ||
+            (record.category == 9 && record.paintKit != 0) ||
+            !record.displayName[0] || !record.weaponName[0] ||
+            !InventoryGameCatalogTerminated(record.displayName) ||
+            !InventoryGameCatalogTerminated(record.weaponName) ||
+            !InventoryGameCatalogTerminated(record.finishName) ||
+            !InventoryGameCatalogTerminated(record.iconResource) ||
+            !InventoryGameCatalogTerminated(record.modelPlayer) ||
+            !InventoryGameCatalogTerminated(record.modelWorld))
+            return false;
+        for (unsigned int j = 0; j < i; ++j)
+            if (records[j].definitionIndex == record.definitionIndex &&
+                records[j].paintKit == record.paintKit)
+                return false;
+    }
+    return true;
+}
+
+static bool InventoryGameCatalogMatchesProcess(const InventoryGameCatalogHeader& header)
+{
+    if (header.processId != GetCurrentProcessId() || !header.processCreated)
+        return false;
+    unsigned long long created = 0, exited = 0, kernel = 0, user = 0;
+    if (!GetProcessTimes(reinterpret_cast<HANDLE>(static_cast<long long>(-1)),
+        &created, &exited, &kernel, &user))
+        return false;
+    // PID alone is insufficient: Windows can reuse it after the game exits.
+    return header.processCreated == created;
+}
+
 static bool LoadInventoryGameCatalog()
 {
-    // Do not permanently cache a failed first read. The loader writes the
-    // sidecar immediately before injection, but manual-map startup and temp-file
-    // visibility can still race. Browse exposes an explicit Reload action too.
-    if (g_inventoryGameCatalogLoaded && g_inventoryGameCatalog &&
-        g_inventoryGameCatalogCount > 0)
+    // Worker/startup thread only. Never replace a published snapshot: UI and
+    // projection consumers may hold a record pointer until their frame ends.
+    if (InventoryGameCatalogReady())
         return true;
     g_inventoryGameCatalogLoadAttempted = true;
 
@@ -136,6 +189,11 @@ static bool LoadInventoryGameCatalog()
         CloseHandle(file);
         return InventoryGameCatalogFail(INVENTORY_GAME_CATALOG_STATUS_HEADER);
     }
+    if (!InventoryGameCatalogMatchesProcess(header))
+    {
+        CloseHandle(file);
+        return InventoryGameCatalogFail(INVENTORY_GAME_CATALOG_STATUS_STALE);
+    }
 
     const SIZE_T bytes = static_cast<SIZE_T>(header.count) *
         sizeof(InventoryGameCatalogRecord);
@@ -152,8 +210,11 @@ static bool LoadInventoryGameCatalog()
     DWORD recordBytes = 0;
     const BOOL ok = ReadFile(file, records, static_cast<DWORD>(bytes),
         &recordBytes, nullptr);
+    BYTE trailingByte = 0;
+    DWORD trailingBytes = 0;
+    const BOOL exactEnd = ReadFile(file, &trailingByte, 1, &trailingBytes, nullptr);
     CloseHandle(file);
-    if (!ok || recordBytes != bytes)
+    if (!ok || recordBytes != bytes || !exactEnd || trailingBytes != 0)
     {
         VirtualFree(records, 0, INVENTORY_GAME_MEM_RELEASE);
         return InventoryGameCatalogFail(INVENTORY_GAME_CATALOG_STATUS_RECORDS);
@@ -163,27 +224,40 @@ static bool LoadInventoryGameCatalog()
         VirtualFree(records, 0, INVENTORY_GAME_MEM_RELEASE);
         return InventoryGameCatalogFail(INVENTORY_GAME_CATALOG_STATUS_CHECKSUM);
     }
+    if (!InventoryGameCatalogValidRecords(records, header.count))
+    {
+        VirtualFree(records, 0, INVENTORY_GAME_MEM_RELEASE);
+        return InventoryGameCatalogFail(INVENTORY_GAME_CATALOG_STATUS_CONTENT);
+    }
 
-    if (g_inventoryGameCatalog)
-        VirtualFree(g_inventoryGameCatalog, 0, INVENTORY_GAME_MEM_RELEASE);
-    g_inventoryGameCatalog = records;
     g_inventoryGameCatalogCount = header.count;
     g_inventoryGameCatalogChecksum = header.checksum;
     g_inventoryGameCatalogLoaded = true;
     g_inventoryGameCatalogLastStatus = INVENTORY_GAME_CATALOG_STATUS_OK;
+    // Publish last with a full barrier; no caller sees half-initialized count
+    // or records. Readiness uses the corresponding atomic pointer read.
+    AtomicCompareExchangePointer(reinterpret_cast<void**>(&g_inventoryGameCatalog),
+        records, nullptr);
     return true;
 }
 
 static bool ReloadInventoryGameCatalog()
 {
-    ShutdownInventoryGameCatalog();
-    return LoadInventoryGameCatalog();
+    if (InventoryGameCatalogReady()) return true;
+    AtomicExchange(&g_inventoryGameCatalogLoadRequested, 1);
+    return false;
+}
+
+static void ProcessInventoryGameCatalogLoadRequests()
+{
+    if (AtomicExchange(&g_inventoryGameCatalogLoadRequested, 0))
+        LoadInventoryGameCatalog();
 }
 
 static bool InventoryGameCatalogReady()
 {
-    return g_inventoryGameCatalogLoaded && g_inventoryGameCatalog &&
-        g_inventoryGameCatalogCount > 0;
+    return AtomicCompareExchangePointer(
+        reinterpret_cast<void**>(&g_inventoryGameCatalog), nullptr, nullptr) != nullptr;
 }
 
 static unsigned int InventoryGameCatalogTotalCount()
@@ -240,6 +314,23 @@ static const InventoryGameCatalogRecord* InventoryGameCatalogFindFirstDefinition
     return nullptr;
 }
 
+static bool InventoryGameCatalogValidatePair(unsigned short definitionIndex, int paintKit)
+{
+    return InventoryGameCatalogFindPair(definitionIndex, paintKit) != nullptr;
+}
+
+static bool InventoryGameCatalogValidateItem(const VirtualInventoryItem& item)
+{
+    const InventoryGameCatalogRecord* record = InventoryGameCatalogFindPair(
+        item.overrideDefinitionIndex, item.paintKit);
+    if (!record) return false;
+    if (record->category == 7) return item.slotDefinitionIndex == INVENTORY_SLOT_KNIFE;
+    if (record->category == 8) return item.slotDefinitionIndex == INVENTORY_SLOT_GLOVE;
+    if (record->category == 9) return item.slotDefinitionIndex == INVENTORY_SLOT_AGENT;
+    return record->category >= 1 && record->category <= 6 &&
+        item.slotDefinitionIndex == item.overrideDefinitionIndex;
+}
+
 static int InventoryGameCatalogCountCategory(int category)
 {
     if (!InventoryGameCatalogReady() || category <= 0)
@@ -281,7 +372,7 @@ static int InventoryGameCatalogCyclePaint(unsigned short definitionIndex,
     for (unsigned int i = 0; i < g_inventoryGameCatalogCount; ++i)
     {
         const InventoryGameCatalogRecord& record = g_inventoryGameCatalog[i];
-        if (record.definitionIndex != definitionIndex || record.paintKit <= 0)
+        if (record.definitionIndex != definitionIndex)
             continue;
         if (first < 0) first = static_cast<int>(i);
         last = static_cast<int>(i);
@@ -289,7 +380,7 @@ static int InventoryGameCatalogCyclePaint(unsigned short definitionIndex,
             current = static_cast<int>(i);
     }
     if (first < 0)
-        return 0;
+        return currentPaint;
     if (current < 0)
         return direction > 0 ? g_inventoryGameCatalog[first].paintKit :
             g_inventoryGameCatalog[last].paintKit;
@@ -300,8 +391,7 @@ static int InventoryGameCatalogCyclePaint(unsigned short definitionIndex,
         candidate += direction > 0 ? 1 : -1;
         if (candidate > last) candidate = first;
         if (candidate < first) candidate = last;
-        if (g_inventoryGameCatalog[candidate].definitionIndex == definitionIndex &&
-            g_inventoryGameCatalog[candidate].paintKit > 0)
+        if (g_inventoryGameCatalog[candidate].definitionIndex == definitionIndex)
             return g_inventoryGameCatalog[candidate].paintKit;
     } while (candidate != current);
     return currentPaint;
@@ -310,13 +400,7 @@ static int InventoryGameCatalogCyclePaint(unsigned short definitionIndex,
 static const InventoryGameCatalogRecord* InventoryGameCatalogForItem(
     const VirtualInventoryItem& item)
 {
-    const InventoryGameCatalogRecord* exact = InventoryGameCatalogFindPair(
-        item.overrideDefinitionIndex, item.paintKit);
-    if (exact)
-        return exact;
-    if (item.paintKit == 0)
-        return InventoryGameCatalogFindFirstDefinition(item.overrideDefinitionIndex);
-    return nullptr;
+    return InventoryGameCatalogFindPair(item.overrideDefinitionIndex, item.paintKit);
 }
 
 static const wchar_t* InventoryGameCatalogDisplayName(
@@ -347,28 +431,65 @@ static const char* InventoryGameCatalogIconResource(
     return record && record->iconResource[0] ? record->iconResource : nullptr;
 }
 
+static int InventoryGameCatalogCountForDefinition(
+    unsigned short definitionIndex)
+{
+    if (!InventoryGameCatalogReady())
+        return 0;
+    int count = 0;
+    for (unsigned int i = 0; i < g_inventoryGameCatalogCount; ++i)
+        if (g_inventoryGameCatalog[i].definitionIndex == definitionIndex)
+            ++count;
+    return count;
+}
+
+static const InventoryGameCatalogRecord*
+InventoryGameCatalogOrdinalForDefinition(
+    unsigned short definitionIndex, int ordinal,
+    int* absoluteIndex)
+{
+    if (!InventoryGameCatalogReady() || ordinal < 0)
+        return nullptr;
+    int seen = 0;
+    for (unsigned int i = 0; i < g_inventoryGameCatalogCount; ++i)
+    {
+        if (g_inventoryGameCatalog[i].definitionIndex != definitionIndex)
+            continue;
+        if (seen++ == ordinal)
+        {
+            if (absoluteIndex)
+                *absoluteIndex = static_cast<int>(i);
+            return &g_inventoryGameCatalog[i];
+        }
+    }
+    return nullptr;
+}
+
+static inline const InventoryGameCatalogRecord*
+InventoryGameCatalogOrdinalForDefinition(
+    unsigned short definitionIndex, int ordinal)
+{
+    return InventoryGameCatalogOrdinalForDefinition(
+        definitionIndex, ordinal, nullptr);
+}
+
+static const wchar_t* InventoryGameCatalogFinishName(
+    const InventoryGameCatalogRecord* record)
+{
+    if (!record)
+        return L"Unavailable";
+    if (record->paintKit == 0)
+        return L"Default finish";
+    if (record->finishName[0])
+        return record->finishName;
+    if (record->displayName[0])
+        return record->displayName;
+    return L"Unnamed finish";
+}
+
 static void InventoryGameCatalogSanitizeLoadedStore()
 {
-    if (!InventoryGameCatalogReady() || !InventoryTryLock())
-        return;
-    bool dirty = false;
-    for (int i = 0; i < g_inventoryStore.itemCount; ++i)
-    {
-        VirtualInventoryItem& item = g_inventoryStore.items[i];
-        if (item.slotDefinitionIndex == INVENTORY_SLOT_MUSIC)
-            continue;
-        if (item.paintKit <= 0)
-            continue;
-        if (InventoryGameCatalogFindPair(item.overrideDefinitionIndex,
-            item.paintKit))
-            continue;
-        // Old versions allowed arbitrary raw paint IDs.  Keep the item itself
-        // but drop an impossible pairing instead of projecting a fake skin.
-        item.paintKit = 0;
-        item.seed = 0;
-        dirty = true;
-    }
-    if (dirty)
-        MarkInventoryDirty();
-    InventoryUnlock();
+    // Deliberately non-mutating. Missing or obsolete pairs stay in saved data,
+    // but strict selection/application validation keeps them inactive. The user
+    // may repair the pair explicitly once a current catalog is available.
 }

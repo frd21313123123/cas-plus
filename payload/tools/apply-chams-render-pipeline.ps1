@@ -1,4 +1,4 @@
-param(
+﻿param(
     [Parameter(Mandatory = $true)]
     [string]$InputPath,
 
@@ -254,8 +254,8 @@ $enemyLoopTailReplacement = @'
             ++stats->highlighted;
     }
 
-    CollectExtendedVisualTargets(g_botHighlightRuntime, entitySystem,
-        localController, localPawn, localHandle, localTeam);
+    CollectSupplementalVisualTargets(g_botHighlightRuntime, entitySystem,
+        controllers, controllerCount, localController, localPawn, localTeam);
     PublishVisualTargets();
 
     ApplyActiveWeaponChams(g_botHighlightRuntime, entitySystem, localPawn);
@@ -285,7 +285,7 @@ $localReadyReplacement = @'
     if (g_espConfig.chams && g_espConfig.chamsStyle != 3)
     {
         if (InstallMeshRenderBackend())
-            EnsureSelectedChamsMaterialsReady();
+            EnsureMaterialManagerReady();
     }
 
 '@
@@ -307,7 +307,7 @@ $oldTargetToggle = @'
     RECT wRc = { 435, 235, 540, 255 };
     DrawTextW(hdc, L"Weapons", -1, &wRc, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
 '@
-if ($source.Contains($oldTargetToggle)) { $source = $source.Replace($oldTargetToggle, '') }
+# Compatibility normalizer: preserve target controls for the full replacement anchor below.
 
 # Remove the old per-frame human-controlled-pawn scratch pass. The typed target
 # collector already works from the validated controller list and this pass was

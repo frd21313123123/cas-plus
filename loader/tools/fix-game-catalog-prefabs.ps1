@@ -66,9 +66,8 @@ $resolverBlock = @'
     auto inheritedValue = [&](const KvNode& item,
         const std::string& key) -> std::string
     {
-        const std::string direct = childValue(item, key);
-        if (!direct.empty())
-            return direct;
+        if (const KvNode* direct = findChild(item, key))
+            return direct->value;
 
         std::vector<std::string> queue;
         appendPrefabNames(queue, childValue(item, "prefab"));
@@ -82,9 +81,8 @@ $resolverBlock = @'
             const KvNode* prefab = findChild(*prefabs, queue[index]);
             if (!prefab)
                 continue;
-            const std::string value = childValue(*prefab, key);
-            if (!value.empty())
-                return value;
+            if (const KvNode* value = findChild(*prefab, key))
+                return value->value;
             appendPrefabNames(queue, childValue(*prefab, "prefab"));
         }
         return {};

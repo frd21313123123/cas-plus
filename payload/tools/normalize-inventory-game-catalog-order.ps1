@@ -27,6 +27,9 @@ struct InventoryGameCatalogHeader {
     unsigned short recordSize;
     unsigned int count;
     unsigned int checksum;
+    unsigned int processId;
+    unsigned long long processCreated;
+    unsigned int schemaChecksum;
 };
 #pragma pack(pop)
 '@
@@ -56,6 +59,9 @@ struct InventoryGameCatalogHeader {
     unsigned short recordSize;
     unsigned int count;
     unsigned int checksum;
+    unsigned int processId;
+    unsigned long long processCreated;
+    unsigned int schemaChecksum;
 };
 #pragma pack(pop)
 
@@ -63,6 +69,9 @@ struct VirtualInventoryItem;
 static bool LoadInventoryGameCatalog();
 static void ShutdownInventoryGameCatalog();
 static bool InventoryGameCatalogReady();
+static bool InventoryGameCatalogValidatePair(unsigned short definitionIndex, int paintKit);
+static bool InventoryGameCatalogValidateItem(const VirtualInventoryItem& item);
+static void ProcessInventoryGameCatalogLoadRequests();
 static const InventoryGameCatalogRecord* InventoryGameCatalogAt(unsigned int index);
 static const InventoryGameCatalogRecord* InventoryGameCatalogFindPair(
     unsigned short definitionIndex, int paintKit);
@@ -71,6 +80,11 @@ static const InventoryGameCatalogRecord* InventoryGameCatalogFindFirstDefinition
 static int InventoryGameCatalogCountCategory(int category);
 static const InventoryGameCatalogRecord* InventoryGameCatalogCategoryOrdinal(
     int category, int ordinal, int* absoluteIndex);
+static int InventoryGameCatalogCountForDefinition(unsigned short definitionIndex);
+static const InventoryGameCatalogRecord* InventoryGameCatalogOrdinalForDefinition(
+    unsigned short definitionIndex, int ordinal, int* absoluteIndex);
+static const wchar_t* InventoryGameCatalogFinishName(
+    const InventoryGameCatalogRecord* record);
 static int InventoryGameCatalogCyclePaint(unsigned short definitionIndex,
     int currentPaint, int direction);
 static const InventoryGameCatalogRecord* InventoryGameCatalogForItem(

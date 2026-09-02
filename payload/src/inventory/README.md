@@ -39,7 +39,8 @@ All game-facing offsets that are available through Source 2 SchemaSystem are res
 - Weapon/knife/glove/agent/music/container domains.
 - Paint kit, seed, wear, StatTrak, quality and definition metadata.
 - T / CT / both / none equip masks.
-- Add current weapon and catalog-driven `+ Weapon` creation.
+- Searchable installed-game selector with separate item and compatible-finish lists.
+- Draft-first add/edit flow: browsing does not mutate inventory; `Add item` / `Save changes` is the commit point.
 - Duplicate/delete with fresh virtual IDs.
 - Selected-item editor and filtered paging.
 - Existing `VirtualInventoryItem` v2 on-disk ABI is preserved.
@@ -68,13 +69,15 @@ The backend never sends a GC message. If a resolver is missing or ambiguous, it 
 
 - Runtime SchemaSystem projection onto locally-owned econ entities.
 - All owned weapon entities are scanned, not only the active weapon.
-- Original cosmetic/definition/item-view state is captured and restored on disable, unequip, entity replacement, map transition and payload shutdown.
+- Original entity fallback state and item-view identity/name/flags are captured and restored on disable, unequip, entity replacement, map transition and cooperative payload shutdown.
 - Full handle + address + identity checks prevent restoring into a reused entity handle.
 - Generic knife loadout slot and full baseline knife definition selector.
 - Weapon definition cycling with team compatibility.
 - Local CEconItem item-ID binding when the shared-object backend is ready.
 - Paint, seed, wear, StatTrak and quality editing.
 - Empty custom names now clear previously projected names instead of leaving stale bytes.
+
+Restoration of engine-owned named/SOC cosmetic attributes is best-effort. A real owned item can keep its original paint only in dynamic attributes while its fallback paint is zero; there is no validated read/remove API for every such attribute in this build. Exact restoration therefore remains an in-game verification item rather than a guarantee.
 
 ### Guarded visual refresh
 
@@ -113,9 +116,9 @@ Sticker sidecar persistence file: `cas_plus_inventory_stickers_v1.bin`.
 ### Agents
 
 - Dedicated agent virtual domain.
-- T and CT baseline agent catalog.
+- T and CT agents sourced from the process-bound installed-game catalog.
 - Agent items are mirrored into local CEconItem state and equipped through the clothing custom-player loadout slot.
-- Agent sanitizer accepts the current high definition-index range rather than accidentally normalizing it as a weapon.
+- Runtime validation requires an exact installed-catalog agent definition and compatible team mask.
 - Paint/seed/StatTrak are disabled for the agent domain.
 
 The adapter deliberately relies on the engine loadout/character lifecycle rather than writing raw model handles. Whether an already-spawned pawn visually hot-swaps immediately is treated as runtime behavior to verify after CS2 updates; respawn/loadout application does not depend on a guessed model path.
@@ -153,7 +156,7 @@ Music intentionally keeps its proven controller adapter: its virtual `overrideDe
 
 - create a `Local Sandbox Case` virtual item;
 - consume/open it into another local virtual inventory item;
-- local randomized weapon/knife/seed/wear/StatTrak reward generation;
+- local randomized weapon/knife/seed/wear/StatTrak reward generation sampled only from verified catalog pairs;
 - persistent collection ID grouping;
 - persistent storage ID grouping;
 - grouping metadata follows duplicate/delete lifecycle.
@@ -164,13 +167,15 @@ Group sidecar persistence file: `cas_plus_inventory_groups_v1.bin`.
 
 ### Catalog tooling
 
-The checked-in runtime contains a stable baseline weapon/knife/paint/music catalog. `payload/tools/generate-inventory-catalog.ps1` can parse a supplied current `items_game.txt` and emit:
+The loader generates the weapon/knife/glove/agent catalog from the installed game before injection. `payload/tools/generate-inventory-catalog.ps1` remains an offline utility that can parse a supplied current `items_game.txt` and emit:
 
 - weapon definitions;
 - weapon/paint compatibility derived from generated icon paths;
 - music-kit definitions.
 
 This keeps large, frequently-changing game data outside the memory adapter. Updating the generated catalog is a data-refresh operation rather than a reason to change entity layouts or write paths.
+
+Music-kit selection still uses the existing small static controller-adapter list and is not currently part of the process-bound installed-game catalog.
 
 ## Build/update safety
 

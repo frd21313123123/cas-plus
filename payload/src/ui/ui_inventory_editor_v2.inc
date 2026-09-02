@@ -3,34 +3,6 @@
 // functions directly, so the visual migration does not duplicate inventory
 // state or game-facing logic.
 
-static const wchar_t* CasUiWearLabel(float wear)
-{
-    if (wear < 0.07f) return L"Factory New";
-    if (wear < 0.15f) return L"Minimal Wear";
-    if (wear < 0.38f) return L"Field-Tested";
-    if (wear < 0.45f) return L"Well-Worn";
-    return L"Battle-Scarred";
-}
-
-static void CasUiDrawValuePill(HDC hdc, int x, int y, int w,
-    const wchar_t* text, bool active = false)
-{
-    DrawRoundedCard(hdc, x, y, w, 28,
-        active ? CAS_UI_ACCENT_SOFT : CAS_UI_SURFACE_3,
-        active ? CAS_UI_BORDER_HI : CAS_UI_BORDER, 6);
-    CasUiDrawLabel(hdc, text, x, y, w, 28,
-        active ? CAS_UI_TEXT : CAS_UI_MUTED, 11, 550, DT_CENTER);
-}
-
-static void CasUiDrawEditorSection(HDC hdc, int x, int y, int w, int h,
-    const wchar_t* title)
-{
-    DrawRoundedCard(hdc, x, y, w, h,
-        CAS_UI_SURFACE, CAS_UI_BORDER, 8);
-    CasUiDrawLabel(hdc, title, x + 16, y + 10, w - 32, 18,
-        CAS_UI_MUTED_2, 10, 650, DT_LEFT);
-}
-
 static void CasUiCycleSelectedDefinitionV2(
     const VirtualInventoryItem& item, int direction)
 {
@@ -101,7 +73,7 @@ static void CasUiDrawInventoryDetailV2(HDC hdc, int width, int height)
     }
 
     const VirtualInventoryItem& item = snapshot.selectedItem;
-    const wchar_t* name = CasUiInventoryDomainName(item);
+    const wchar_t* name = CasUiItemDisplayName(item);
     const COLORREF accent = CasUiItemAccent(item);
 
     // Left hero/summary panel.
@@ -174,7 +146,7 @@ static void CasUiDrawInventoryDetailV2(HDC hdc, int width, int height)
     CasUiDrawLabel(hdc, L"Paint", 454, 226, 60, 20,
         CAS_UI_MUTED, 11, 500, DT_LEFT);
     CasUiDrawLabel(hdc,
-        InventoryCatalogPaintName(item.paintKit, item.slotDefinitionIndex),
+        CasUiItemFinishName(item),
         520, 224, 204, 22, CAS_UI_TEXT, 11, 550, DT_LEFT);
     CasUiDrawButton(hdc, 742, 220, 78, 28, L"< Skin");
     CasUiDrawButton(hdc, 826, 220, 94, 28, L"Skin >");

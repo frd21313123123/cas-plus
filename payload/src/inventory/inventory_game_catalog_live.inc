@@ -25,15 +25,8 @@ static bool InventoryGameCatalogSetLiveFloat(BYTE* view,
 static bool InventoryGameCatalogApplyLiveView(BYTE* itemView,
     const VirtualInventoryItem& item)
 {
-    if (!itemView || item.paintKit <= 0)
-        return itemView != nullptr;
-    // This exact (definition, paint) pair came from alternate_icons2 in the
-    // installed items_game. Reject an old/raw impossible pair instead of asking
-    // the material system to build a skin that does not exist for this weapon.
-    if (!InventoryGameCatalogFindPair(item.overrideDefinitionIndex,
-        item.paintKit))
+    if (!itemView || !InventoryGameCatalogValidateItem(item))
         return false;
-
     bool applied = true;
     applied = InventoryGameCatalogSetLiveFloat(itemView,
         "set item texture prefab", static_cast<float>(item.paintKit)) && applied;

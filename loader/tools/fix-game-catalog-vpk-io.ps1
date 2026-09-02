@@ -17,8 +17,8 @@ function Replace-Required([string]$Needle, [string]$Replacement, [string]$Name) 
 # Loose text files such as items_game/localization can grow across game updates.
 # Keep a bounded read, but do not use the old 128 MiB ceiling as a hidden schema gate.
 Replace-Required `
-    '128ull * 1024ull * 1024ull' `
-    '512ull * 1024ull * 1024ull' `
+    'static_cast<std::streamoff>(128ull * 1024ull * 1024ull)' `
+    'static_cast<std::streamoff>(512ull * 1024ull * 1024ull)' `
     'loose game-file size ceiling'
 
 $openAnchor = @'

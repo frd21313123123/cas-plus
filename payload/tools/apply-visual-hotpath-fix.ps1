@@ -1,4 +1,4 @@
-param(
+﻿param(
     [Parameter(Mandatory = $true)]
     [string]$InputPath
 )
@@ -58,7 +58,8 @@ static VisualTargetKind FastVisualTargetKindFor(unsigned int handle)
     if (entry.generation != generation || entry.handle != handle)
         return VISUAL_TARGET_NONE;
     const VisualTargetKind kind = static_cast<VisualTargetKind>(entry.kind);
-    return VisualTargetKindEnabled(kind) ? kind : VISUAL_TARGET_NONE;
+    return (kind > VISUAL_TARGET_NONE && kind <= VISUAL_TARGET_BOMB) ?
+        kind : VISUAL_TARGET_NONE;
 }
 '@
 Replace-Required $registryAnchor $registryReplacement.TrimEnd() 'fast target table declaration'

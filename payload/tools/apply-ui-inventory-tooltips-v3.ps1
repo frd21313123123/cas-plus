@@ -4,14 +4,15 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$source = Get-Content -LiteralPath $InputPath -Raw -Encoding UTF8
+$script:source = (Get-Content -LiteralPath $InputPath -Raw -Encoding UTF8).Replace("`r`n", "`n").Replace("`n", "`r`n")
 
 function Replace-Required([string]$Needle, [string]$Replacement, [string]$Name) {
-    $count = ([regex]::Matches($script:source, [regex]::Escape($Needle))).Count
+    $n = $Needle.Replace("`r`n", "`n").Replace("`n", "`r`n")
+    $count = ([regex]::Matches($script:source, [regex]::Escape($n))).Count
     if ($count -ne 1) {
         throw "Inventory tooltip anchor '$Name' expected exactly once, found $count. Refusing to patch blindly."
     }
-    $script:source = $script:source.Replace($Needle, $Replacement)
+    $script:source = $script:source.Replace($n, $Replacement.Replace("`r`n", "`n").Replace("`n", "`r`n"))
 }
 
 # Register tooltip hitboxes at the end of the native Item Editor draw. The
@@ -104,5 +105,5 @@ $positionReplacement = @'
 '@
 Replace-Required $positionAnchor $positionReplacement.TrimEnd() '980x620 menu centering dimensions'
 
-Set-Content -LiteralPath $InputPath -Value $source -Encoding UTF8
+Set-Content -LiteralPath $InputPath -Value $script:source -Encoding UTF8
 Write-Host "Applied Inventory/Sticker V3 tooltips and corrected menu centering: $InputPath"
