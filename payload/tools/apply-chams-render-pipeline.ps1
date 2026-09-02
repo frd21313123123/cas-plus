@@ -419,7 +419,7 @@ $startupAnchor = @'
         SetSkyboxStatus(L"Sky: failed to install the frame-stage bridge.");
         SetBotStatus(L"Bots: failed to install the frame-stage bridge.");
     }
-    PositionMenuOverGame();
+    PositionMenuInGameClient();
 '@
 $startupReplacement = @'
     if (!InstallFrameStageBridge())
@@ -434,7 +434,7 @@ $startupReplacement = @'
         g_botHighlightEnabled = modelEffects;
         QueueBotHighlight(modelEffects);
     }
-    PositionMenuOverGame();
+    PositionMenuInGameClient();
 '@
 if (-not $source.Contains($startupAnchor)) { throw 'Frame-stage startup anchor was not found. Refusing to patch blindly.' }
 $source = $source.Replace($startupAnchor, $startupReplacement)

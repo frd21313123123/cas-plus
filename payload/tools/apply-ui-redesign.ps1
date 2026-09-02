@@ -48,11 +48,13 @@ $script:source = $script:source.Substring(0, $menuIndex) + $module + "`r`n`r`n" 
 Replace-Required @'
     constexpr int kWidth = 780;
     constexpr int kHeight = 500;
-    HWND wnd = CreateWindowExW(WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE, kClassName, L"CAS v2.3 - ESP Settings & Interactive Preview",
+    HWND wnd = CreateWindowExW(WS_EX_NOACTIVATE, kClassName,
+        L"CAS in-game menu",
 '@ @'
     constexpr int kWidth = 980;
     constexpr int kHeight = 620;
-    HWND wnd = CreateWindowExW(WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE, kClassName, L"cas+  |  control center",
+    HWND wnd = CreateWindowExW(WS_EX_NOACTIVATE, kClassName,
+        L"CAS in-game menu",
 '@ 'menu window dimensions/title'
 
 Replace-Required @'
