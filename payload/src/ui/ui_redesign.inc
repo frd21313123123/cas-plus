@@ -444,8 +444,38 @@ static const wchar_t* CasUiTeamBadge(BYTE teams)
     return L"NONE";
 }
 
+static bool CasUiRarityTokenEquals(const char* token, const char* expected)
+{
+    if (!token || !expected) return false;
+    for (int i = 0;; ++i)
+    {
+        if (token[i] != expected[i]) return false;
+        if (!token[i]) return true;
+    }
+}
+
+static COLORREF CasUiGameRarityColor(const InventoryGameCatalogRecord* record)
+{
+    if (!record || record->paintKit <= 0) return RGB_COLOR(225, 227, 235);
+    const char* rarity = InventoryGameCatalogRarity(record);
+    if (!rarity) return RGB_COLOR(225, 227, 235);
+    if (CasUiRarityTokenEquals(rarity, "rarity_common")) return RGB_COLOR(176, 195, 217);
+    if (CasUiRarityTokenEquals(rarity, "rarity_uncommon")) return RGB_COLOR(94, 152, 217);
+    if (CasUiRarityTokenEquals(rarity, "rarity_rare")) return RGB_COLOR(75, 105, 255);
+    if (CasUiRarityTokenEquals(rarity, "rarity_mythical")) return RGB_COLOR(136, 71, 255);
+    if (CasUiRarityTokenEquals(rarity, "rarity_legendary")) return RGB_COLOR(211, 44, 230);
+    if (CasUiRarityTokenEquals(rarity, "rarity_ancient")) return RGB_COLOR(235, 75, 75);
+    if (CasUiRarityTokenEquals(rarity, "rarity_immortal")) return RGB_COLOR(232, 187, 64);
+    return RGB_COLOR(225, 227, 235);
+}
+
 static COLORREF CasUiItemAccent(const VirtualInventoryItem& item)
 {
+    // Local inventory cards use the same source-derived rarity as the
+    // selector. Paint-kit IDs encode no rarity and are never hashed.
+    if (const InventoryGameCatalogRecord* record = InventoryGameCatalogForItem(item))
+        if (record->paintKit > 0 && record->rarity[0])
+            return CasUiGameRarityColor(record);
     if (item.slotDefinitionIndex == INVENTORY_SLOT_GLOVE)
         return RGB_COLOR(216, 76, 154);
     if (item.slotDefinitionIndex == INVENTORY_SLOT_AGENT)
@@ -625,15 +655,11 @@ static void CasUiDrawInventoryHome(HDC hdc, int width, int height)
 
 static COLORREF CasUiGetSkinRarityColor(const wchar_t* name, int paintKit)
 {
-    if (paintKit <= 0 || !name || !name[0])
-        return RGB_COLOR(225, 227, 235); // Default / White
-
-    int hash = paintKit % 5;
-    if (hash == 0) return RGB_COLOR(235, 75, 75);  // Covert Red
-    if (hash == 1) return RGB_COLOR(211, 44, 230); // Classified Pink
-    if (hash == 2) return RGB_COLOR(136, 71, 255); // Restricted Purple
-    if (hash == 3) return RGB_COLOR(75, 105, 255); // Mil-Spec Blue
-    return RGB_COLOR(235, 75, 75);                 // Covert Red
+    // Deprecated browser lacks a definition index and cannot look up a real
+    // pair. Remain neutral instead of fabricating rarity from paintKit.
+    (void)name;
+    (void)paintKit;
+    return RGB_COLOR(225, 227, 235);
 }
 
 static unsigned short CasUiGetCurrentDefinition(int subtab, const wchar_t** modelName)

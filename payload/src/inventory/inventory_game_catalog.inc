@@ -4,7 +4,7 @@
 // payload only consumes that snapshot; it never invents weapon/paint/model pairs.
 
 constexpr unsigned int INVENTORY_GAME_CATALOG_MAGIC = 0x31434743u; // CGC1
-constexpr unsigned short INVENTORY_GAME_CATALOG_VERSION = 2;
+constexpr unsigned short INVENTORY_GAME_CATALOG_VERSION = 3;
 constexpr unsigned int INVENTORY_GAME_CATALOG_MAX_RECORDS = 8192u;
 constexpr DWORD INVENTORY_GAME_MEM_COMMIT_RESERVE = 0x3000u;
 constexpr DWORD INVENTORY_GAME_MEM_RELEASE = 0x8000u;
@@ -19,6 +19,7 @@ struct InventoryGameCatalogRecord {
     wchar_t displayName[80];
     wchar_t weaponName[48];
     wchar_t finishName[64];
+    char rarity[32];
     char iconResource[160];
     char modelPlayer[160];
     char modelWorld[160];
@@ -135,6 +136,7 @@ static bool InventoryGameCatalogValidRecords(
             !InventoryGameCatalogTerminated(record.displayName) ||
             !InventoryGameCatalogTerminated(record.weaponName) ||
             !InventoryGameCatalogTerminated(record.finishName) ||
+            !InventoryGameCatalogTerminated(record.rarity) ||
             !InventoryGameCatalogTerminated(record.iconResource) ||
             !InventoryGameCatalogTerminated(record.modelPlayer) ||
             !InventoryGameCatalogTerminated(record.modelWorld))
@@ -429,6 +431,12 @@ static const char* InventoryGameCatalogIconResource(
 {
     const InventoryGameCatalogRecord* record = InventoryGameCatalogForItem(item);
     return record && record->iconResource[0] ? record->iconResource : nullptr;
+}
+
+static const char* InventoryGameCatalogRarity(
+    const InventoryGameCatalogRecord* record)
+{
+    return record && record->rarity[0] ? record->rarity : nullptr;
 }
 
 static int InventoryGameCatalogCountForDefinition(

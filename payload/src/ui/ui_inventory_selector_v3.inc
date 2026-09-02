@@ -136,6 +136,44 @@ static const wchar_t* CasSelectorFinishName(const InventoryGameCatalogRecord* re
     return record->finishName[0] ? record->finishName : record->displayName;
 }
 
+static bool CasSelectorRarityEquals(const char* token, const char* expected)
+{
+    if (!token || !expected) return false;
+    for (int i = 0;; ++i)
+    {
+        if (token[i] != expected[i]) return false;
+        if (!token[i]) return true;
+    }
+}
+
+static COLORREF CasSelectorRarityColor(const InventoryGameCatalogRecord* record)
+{
+    const char* rarity = InventoryGameCatalogRarity(record);
+    // Values are the exact Source 2 paint_kits rarity tokens.  Unknown or
+    // absent values stay neutral; paint-kit IDs must never be used as colors.
+    if (CasSelectorRarityEquals(rarity, "rarity_common")) return RGB_COLOR(176, 195, 217);
+    if (CasSelectorRarityEquals(rarity, "rarity_uncommon")) return RGB_COLOR(94, 152, 217);
+    if (CasSelectorRarityEquals(rarity, "rarity_rare")) return RGB_COLOR(75, 105, 255);
+    if (CasSelectorRarityEquals(rarity, "rarity_mythical")) return RGB_COLOR(136, 71, 255);
+    if (CasSelectorRarityEquals(rarity, "rarity_legendary")) return RGB_COLOR(211, 44, 230);
+    if (CasSelectorRarityEquals(rarity, "rarity_ancient")) return RGB_COLOR(235, 75, 75);
+    if (CasSelectorRarityEquals(rarity, "rarity_immortal")) return RGB_COLOR(232, 187, 64);
+    return RGB_COLOR(225, 227, 235);
+}
+
+static const wchar_t* CasSelectorRarityName(const InventoryGameCatalogRecord* record)
+{
+    const char* rarity = InventoryGameCatalogRarity(record);
+    if (CasSelectorRarityEquals(rarity, "rarity_common")) return L"Consumer grade";
+    if (CasSelectorRarityEquals(rarity, "rarity_uncommon")) return L"Industrial grade";
+    if (CasSelectorRarityEquals(rarity, "rarity_rare")) return L"Mil-Spec grade";
+    if (CasSelectorRarityEquals(rarity, "rarity_mythical")) return L"Restricted";
+    if (CasSelectorRarityEquals(rarity, "rarity_legendary")) return L"Classified";
+    if (CasSelectorRarityEquals(rarity, "rarity_ancient")) return L"Covert";
+    if (CasSelectorRarityEquals(rarity, "rarity_immortal")) return L"Extraordinary";
+    return record && record->paintKit == 0 ? L"Default" : L"Rarity unavailable";
+}
+
 static bool CasSelectorCategoryMatches(int category)
 {
     if (g_casSelectorCategory == 0) return category >= 1 && category <= 6;
@@ -473,9 +511,13 @@ static void CasSelectorDrawList(HDC hdc, bool finishes, int x, int w)
         DrawRoundedCard(hdc, x, y, w, 32,
             selected ? CAS_SELECTOR_SELECTED : hover ? CAS_UI_SURFACE_3 : CAS_UI_SURFACE,
             focus ? CAS_SELECTOR_FOCUS : selected ? RGB_COLOR(100, 139, 194) : CAS_UI_SURFACE, 4);
+        if (finishes)
+            CasUiDrawRect(hdc, x + 2, y + 4, x + 5, y + 28, CasSelectorRarityColor(record));
         if (selected) CasUiDrawCheckmark(hdc, x + 7, y + 10, CAS_UI_TEXT);
         const wchar_t* name = finishes ? CasSelectorFinishName(record) : CasSelectorWeaponName(record);
-        CasUiDrawLabel(hdc, name, x + 25, y, w - 31, 32, CAS_UI_TEXT, 13, selected ? 600 : 400, DT_LEFT | 0x8000 /* DT_END_ELLIPSIS */);
+        CasUiDrawLabel(hdc, name, x + 25, y, w - 31, 32,
+            finishes ? CasSelectorRarityColor(record) : CAS_UI_TEXT, 13,
+            selected ? 600 : 400, DT_LEFT | 0x8000 /* DT_END_ELLIPSIS */);
         CasUiTooltipCandidate(x, y, w, 32, name, 8);
     }
     if (!count)
@@ -528,32 +570,39 @@ static void CasSelectorDraw(HDC hdc, int width, int height)
     const InventoryGameCatalogRecord* model = record ? record : InventoryGameCatalogFindFirstDefinition(g_casSelectorDefinition);
     CasUiDrawLabel(hdc, L"3. Review and add", 686, 119, 246, 24, CAS_SELECTOR_SECONDARY, 13, 600);
     CasSelectorText(hdc, CasSelectorWeaponName(model), 686, 149, 246, 40, CAS_UI_TEXT, 17);
-    CasSelectorText(hdc, CasSelectorFinishName(record), 686, 190, 246, 42, CAS_UI_TEXT, 14);
-    // No thumbnail is available in the snapshot. A neutral named card is more
-    // truthful than a paint-ID hash, fake rarity stripe, or invented skin image.
-    CasUiDrawLabel(hdc, L"Artwork unavailable - names are verified", 686, 235, 246, 22, CAS_SELECTOR_SECONDARY, 12);
+    CasSelectorText(hdc, CasSelectorFinishName(record), 686, 190, 246, 42,
+        CasSelectorRarityColor(record), 14);
+    // This is a data preview of the exact selected game resource.  The GDI
+    // overlay cannot decode Source 2 .vtex_c images, so it exposes the model
+    // and Panorama icon provenance rather than displaying fabricated artwork.
+    DrawRoundedCard(hdc, 686, 234, 246, 52, CAS_UI_SURFACE_2,
+        CasSelectorRarityColor(record), 5);
+    CasUiDrawLabel(hdc, L"Installed-game weapon preview", 696, 240, 224, 16,
+        CAS_UI_TEXT, 11, 600, DT_LEFT);
+    CasUiDrawLabel(hdc, CasSelectorRarityName(record), 696, 258, 224, 18,
+        CasSelectorRarityColor(record), 12, 600, DT_LEFT);
     const bool cosmetic = record && record->paintKit > 0 && record->category <= 8;
-    CasUiDrawLabel(hdc, L"Wear (0 - 1)", 686, 265, 118, 25, CAS_SELECTOR_SECONDARY, 13);
-    CasSelectorField(hdc, 810, 261, 122, g_casSelectorWear, L"0.0001", CAS_SEL_WEAR, cosmetic);
+    CasUiDrawLabel(hdc, L"Wear (0 - 1)", 686, 296, 118, 25, CAS_SELECTOR_SECONDARY, 13);
+    CasSelectorField(hdc, 810, 292, 122, g_casSelectorWear, L"0.0001", CAS_SEL_WEAR, cosmetic);
     const wchar_t* wearLabels[] = { L"FN", L"MW", L"FT", L"WW", L"BS" };
-    for (int i = 0; i < 5; ++i) CasSelectorButton(hdc, 686 + i * 50, 301, 46, wearLabels[i], false, cosmetic);
-    CasUiDrawLabel(hdc, L"Seed (0 - 1000)", 686, 346, 140, 28, CAS_SELECTOR_SECONDARY, 13);
-    CasSelectorField(hdc, 838, 342, 94, g_casSelectorSeed, L"0", CAS_SEL_SEED, cosmetic);
+    for (int i = 0; i < 5; ++i) CasSelectorButton(hdc, 686 + i * 50, 332, 46, wearLabels[i], false, cosmetic);
+    CasUiDrawLabel(hdc, L"Seed (0 - 1000)", 686, 377, 140, 28, CAS_SELECTOR_SECONDARY, 13);
+    CasSelectorField(hdc, 838, 373, 94, g_casSelectorSeed, L"0", CAS_SEL_SEED, cosmetic);
     const bool tracking = cosmetic && record->category < 8;
-    CasSelectorButton(hdc, 686, 383, 136, g_casSelectorTracking ? L"StatTrak: on" : L"StatTrak: off", g_casSelectorTracking,
+    CasSelectorButton(hdc, 686, 414, 136, g_casSelectorTracking ? L"StatTrak: on" : L"StatTrak: off", g_casSelectorTracking,
         tracking, g_casSelectorFocus == CAS_SEL_TRACKING);
-    CasSelectorField(hdc, 830, 383, 102, g_casSelectorCounter, L"0", CAS_SEL_COUNTER, tracking && g_casSelectorTracking);
-    CasUiDrawLabel(hdc, L"Add first; equip later in My items", 686, 423, 246, 24,
+    CasSelectorField(hdc, 830, 414, 102, g_casSelectorCounter, L"0", CAS_SEL_COUNTER, tracking && g_casSelectorTracking);
+    CasUiDrawLabel(hdc, L"Add first; equip later in My items", 686, 454, 246, 24,
         CAS_SELECTOR_SECONDARY, 13);
     const BYTE availability = model ? model->teamMask : INVENTORY_TEAM_NONE;
-    CasSelectorButton(hdc, 686, 453, 118,
+    CasSelectorButton(hdc, 686, 480, 118,
         (availability & INVENTORY_TEAM_T) ? L"T supported" : L"T unavailable", false, false);
-    CasSelectorButton(hdc, 814, 453, 118,
+    CasSelectorButton(hdc, 814, 480, 118,
         (availability & INVENTORY_TEAM_CT) ? L"CT supported" : L"CT unavailable", false, false);
     const wchar_t* error = CasSelectorValidation();
     bool full = false;
     if (InventoryTryLock()) { full = !g_casSelectorEditId && g_inventoryStore.itemCount >= INVENTORY_MAX_ITEMS; InventoryUnlock(); }
-    CasSelectorButton(hdc, 686, 511, 246, full ? L"Inventory full" : g_casSelectorEditId ? L"Save changes" : L"Add item",
+    CasSelectorButton(hdc, 686, 520, 246, full ? L"Inventory full" : g_casSelectorEditId ? L"Save changes" : L"Add item",
         false, !error && !full, g_casSelectorFocus == CAS_SEL_SUBMIT, true);
     CasSelectorText(hdc, g_casSelectorNotice ? g_casSelectorNotice : error ? error : L"Ready. Only Add item / Save changes modifies your local inventory.",
         174, 568, 772, 36, CAS_SELECTOR_SECONDARY, 13);
@@ -594,14 +643,14 @@ static bool CasSelectorClick(int x, int y)
     {
         const InventoryGameCatalogRecord* record = CasSelectorSelectedRecord();
         const bool cosmetic = record && record->paintKit > 0 && record->category <= 8;
-        if (cosmetic && CasUiPointInRect(x, y, 810, 261, 122, 32)) CasSelectorSetFocus(CAS_SEL_WEAR);
-        else if (cosmetic && CasUiPointInRect(x, y, 838, 342, 94, 32)) CasSelectorSetFocus(CAS_SEL_SEED);
-        else if (cosmetic && record->category < 8 && CasUiPointInRect(x, y, 686, 383, 136, 32))
+        if (cosmetic && CasUiPointInRect(x, y, 810, 292, 122, 32)) CasSelectorSetFocus(CAS_SEL_WEAR);
+        else if (cosmetic && CasUiPointInRect(x, y, 838, 373, 94, 32)) CasSelectorSetFocus(CAS_SEL_SEED);
+        else if (cosmetic && record->category < 8 && CasUiPointInRect(x, y, 686, 414, 136, 32))
         { CasSelectorSetFocus(CAS_SEL_TRACKING); g_casSelectorTracking = !g_casSelectorTracking; }
-        else if (cosmetic && record->category < 8 && g_casSelectorTracking && CasUiPointInRect(x, y, 830, 383, 102, 32)) CasSelectorSetFocus(CAS_SEL_COUNTER);
-        else if (CasUiPointInRect(x, y, 686, 511, 246, 32)) { CasSelectorSetFocus(CAS_SEL_SUBMIT); CasSelectorSubmit(); }
+        else if (cosmetic && record->category < 8 && g_casSelectorTracking && CasUiPointInRect(x, y, 830, 414, 102, 32)) CasSelectorSetFocus(CAS_SEL_COUNTER);
+        else if (CasUiPointInRect(x, y, 686, 520, 246, 32)) { CasSelectorSetFocus(CAS_SEL_SUBMIT); CasSelectorSubmit(); }
         for (int i = 0; i < 5 && cosmetic; ++i)
-            if (CasUiPointInRect(x, y, 686 + i * 50, 301, 46, 32))
+            if (CasUiPointInRect(x, y, 686 + i * 50, 332, 46, 32))
             {
                 const wchar_t* values[] = { L"0.0001", L"0.08", L"0.20", L"0.40", L"0.55" };
                 CasSelectorCopy(g_casSelectorWear, 16, values[i]); CasSelectorSetFocus(CAS_SEL_WEAR);
@@ -609,7 +658,7 @@ static bool CasSelectorClick(int x, int y)
         const InventoryGameCatalogRecord* model = InventoryGameCatalogFindFirstDefinition(g_casSelectorDefinition);
         const BYTE masks[] = { INVENTORY_TEAM_NONE, INVENTORY_TEAM_T, INVENTORY_TEAM_CT, INVENTORY_TEAM_BOTH };
         for (int i = 0; i < 4 && model; ++i)
-            if (CasUiPointInRect(x, y, 686 + i * 62, 453, 58, 32) && ((masks[i] & model->teamMask) == masks[i]))
+            if (CasUiPointInRect(x, y, 686 + i * 62, 480, 58, 32) && ((masks[i] & model->teamMask) == masks[i]))
             { g_casSelectorTeams = masks[i]; CasSelectorSetFocus(CAS_SEL_TEAM); }
     }
     return true;

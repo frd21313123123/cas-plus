@@ -17,6 +17,7 @@ struct InventoryGameCatalogRecord {
     wchar_t displayName[80];
     wchar_t weaponName[48];
     wchar_t finishName[64];
+    char rarity[32];
     char iconResource[160];
     char modelPlayer[160];
     char modelWorld[160];

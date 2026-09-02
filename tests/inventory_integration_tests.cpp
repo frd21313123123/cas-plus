@@ -16,7 +16,7 @@
 static_assert(sizeof(VirtualInventoryItem) == 64,
     "The existing v2 user inventory record must remain compatible.");
 static_assert(sizeof(InventoryGameCatalogHeader) == 32);
-static_assert(sizeof(InventoryGameCatalogRecord) == 872);
+static_assert(sizeof(InventoryGameCatalogRecord) == 904);
 
 static void InventoryTestDrawMenu(HDC dc, int width, int height)
 {

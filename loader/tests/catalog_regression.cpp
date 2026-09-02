@@ -49,9 +49,9 @@ static std::vector<cas_catalog::GameCatalogRecord> buildFixture()
     "17junk" { "name" "weapon_mac10" }
   }
   "paint_kits" {
-    "100" { "name" "red" "description_tag" "#RED" }
+    "100" { "name" "red" "description_tag" "#RED" "rarity" "rarity_ancient" }
     "101" { "name" "silencer_red" "description_tag" "#AMBIGUOUS" }
-    "102" { "name" "blue" "description_tag" "#BLUE" }
+    "102" { "name" "blue" "description_tag" "#BLUE" "rarity" "rarity_mythical" }
     "103" { "name" "duplicate_name" "description_tag" "#RED" }
     "104" { "name" "duplicate_name" "description_tag" "#BLUE" }
     "105junk" { "name" "bad_id" }
@@ -95,6 +95,8 @@ static std::vector<cas_catalog::GameCatalogRecord> buildFixture()
     require(pair(4619, 0), "standalone agent definition");
     require(std::wstring(pair(16, 0)->displayName) == L"M4A4", "default name is not first painted skin");
     require(std::wstring(pair(16, 100)->displayName) == L"M4A4 | Red finish", "localized weapon and finish");
+    require(std::string(pair(16, 100)->rarity) == "rarity_ancient" &&
+        std::string(pair(60, 102)->rarity) == "rarity_mythical", "paint rarity is preserved from schema");
     require(std::string(pair(60, 102)->modelPlayer) == "models/weapons/base.vmdl", "nested prefab model inherited");
     require(pair(60, 102)->teamMask == 2, "nested prefab team inherited");
     require(records.size() == 9 && stats.duplicatesRemoved == 1, "pairs deduplicated deterministically");

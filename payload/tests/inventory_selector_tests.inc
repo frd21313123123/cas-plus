@@ -10,6 +10,11 @@ static void InventoryPrepareSelectorSnapshot(int scenario)
         L"\x041a\x0440\x0430\x0441\x043d\x0430\x044f \x043b\x0438\x043d\x0438\x044f", L"The Empress", L"Neon Revolution", L"Bloodsport",
         L"Frontside Misty", L"Point Disarray", L"Orbit Mk01", L"Neon Rider", L"", L"Dragon Lore",
         L"", L"Howl", L"", L"Crimson Web", L"Fixture glove finish", L"" };
+    const char* rarities[] = { "", "rarity_ancient", "rarity_rare", "rarity_rare",
+        "rarity_mythical", "rarity_ancient", "rarity_legendary", "rarity_ancient",
+        "rarity_mythical", "rarity_rare", "rarity_mythical", "rarity_legendary", "",
+        "rarity_ancient", "", "rarity_ancient", "", "rarity_legendary",
+        "rarity_ancient", "" };
     for (int i = 0; i < 20; ++i)
     {
         InventoryGameCatalogRecord& row = g_selectorTestCatalog[i];
@@ -21,6 +26,8 @@ static void InventoryPrepareSelectorSnapshot(int scenario)
             i < 18 ? L"M9 Bayonet" : i == 18 ? L"Fixture gloves" : L"Fixture agent");
         CasSelectorCopy(row.finishName, 64, finishes[i]);
         CasSelectorCopy(row.displayName, 80, row.weaponName);
+        for (int j = 0; rarities[i][j] && j + 1 < static_cast<int>(sizeof(row.rarity)); ++j)
+            row.rarity[j] = rarities[i][j];
     }
     g_inventoryGameCatalog = scenario == 2 ? nullptr : g_selectorTestCatalog;
     g_inventoryGameCatalogCount = scenario == 2 ? 0 : 20;
@@ -65,6 +72,7 @@ static int InventoryRunSelectorTests()
     INV_SELECTOR_EXPECT(g_casSelectorFinishCount == 12);
     INV_SELECTOR_EXPECT(g_casSelectorDefinition == 7);
     INV_SELECTOR_EXPECT(g_casSelectorPaint == 302);
+    INV_SELECTOR_EXPECT(CasSelectorRarityColor(CasSelectorSelectedRecord()) == RGB_COLOR(75, 105, 255));
     INV_SELECTOR_EXPECT(g_inventoryStore.itemCount == 0);
     INV_SELECTOR_EXPECT(CasSelectorValidation() == nullptr);
     g_casSelectorEditId = 42;

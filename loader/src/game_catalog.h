@@ -25,7 +25,7 @@ namespace cas_catalog
 namespace fs = std::filesystem;
 
 constexpr std::uint32_t kCatalogMagic = 0x31434743u; // CGC1
-constexpr std::uint16_t kCatalogVersion = 2;
+constexpr std::uint16_t kCatalogVersion = 3;
 constexpr std::size_t kMaxCatalogRecords = 8192;
 
 #pragma pack(push, 1)
@@ -38,6 +38,9 @@ struct GameCatalogRecord
     wchar_t displayName[80];
     wchar_t weaponName[48];
     wchar_t finishName[64];
+    // Exact rarity token from this installed game's paint_kits entry.  It is
+    // deliberately carried as data rather than inferred from a paint-kit ID.
+    char rarity[32];
     char iconResource[160];
     char modelPlayer[160];
     char modelWorld[160];
@@ -735,6 +738,7 @@ inline bool buildCatalogRecords(const KvNode& root, const VpkDirectory& vpk,
         int id = 0;
         std::string internal;
         std::string descriptionToken;
+        std::string rarity;
     };
 
     std::vector<ItemInfo> itemInfos;
@@ -776,6 +780,7 @@ inline bool buildCatalogRecords(const KvNode& root, const VpkDirectory& vpk,
         paint.id = id;
         paint.internal = lowerAscii(childValue(block, "name"));
         paint.descriptionToken = childValue(block, "description_tag");
+        paint.rarity = lowerAscii(childValue(block, "rarity"));
         if (paint.internal.empty()) continue;
         const auto existing = paints.find(paint.internal);
         if (existing != paints.end() && existing->second.id != paint.id)
@@ -813,7 +818,8 @@ inline bool buildCatalogRecords(const KvNode& root, const VpkDirectory& vpk,
     std::unordered_set<std::uint64_t> seen;
 
     auto appendRecord = [&](const ItemInfo& item, int paintKit,
-        const std::wstring& finish, const std::string& iconLogical) {
+        const std::wstring& finish, const std::string& rarity,
+        const std::string& iconLogical) {
         if (records.size() >= kMaxCatalogRecords) return;
         const std::uint64_t key = (static_cast<std::uint64_t>(
             static_cast<std::uint16_t>(item.definition)) << 32) |
@@ -832,6 +838,7 @@ inline bool buildCatalogRecords(const KvNode& root, const VpkDirectory& vpk,
             &localStats.missingIconAssets);
         if (item.modelPlayer.size() >= sizeof(GameCatalogRecord::modelPlayer) ||
             item.modelWorld.size() >= sizeof(GameCatalogRecord::modelWorld) ||
+            rarity.size() >= sizeof(GameCatalogRecord::rarity) ||
             icon.size() >= sizeof(GameCatalogRecord::iconResource))
             return;
 
@@ -850,6 +857,7 @@ inline bool buildCatalogRecords(const KvNode& root, const VpkDirectory& vpk,
         copyWide(record.displayName, std::size(record.displayName), display);
         copyWide(record.weaponName, std::size(record.weaponName), weapon);
         copyWide(record.finishName, std::size(record.finishName), finish);
+        copyAscii(record.rarity, std::size(record.rarity), rarity);
         copyAscii(record.iconResource, std::size(record.iconResource),
             icon);
         copyAscii(record.modelPlayer, std::size(record.modelPlayer), item.modelPlayer);
@@ -897,7 +905,7 @@ inline bool buildCatalogRecords(const KvNode& root, const VpkDirectory& vpk,
         if (!item || !paint || ambiguous) continue;
         const std::wstring finish = localize(paint->descriptionToken,
             localization, paint->internal);
-        appendRecord(*item, paint->id, finish, logical);
+        appendRecord(*item, paint->id, finish, paint->rarity, logical);
     }
 
     // Default finish is an explicit definition-backed record, never an alias
@@ -911,7 +919,7 @@ inline bool buildCatalogRecords(const KvNode& root, const VpkDirectory& vpk,
         // Cosmetic glove definitions have no purchasable default finish.
         // Only standalone agents, weapons and knives expose paint-kit zero.
         if (item.category == 8) continue;
-        appendRecord(item, 0, L"", icon);
+        appendRecord(item, 0, L"", "", icon);
     }
 
     std::sort(records.begin(), records.end(), [](const GameCatalogRecord& a,
