@@ -54,6 +54,7 @@ namespace cas_velocity
         bool body_aim{};
         bool force_shot_air{};
         bool force_shot_ground{};
+        bool auto_stop{ true };
         float max_fov{ 180.0f };
         int hitchance{ 80 };
         int min_damage{ 101 };
@@ -151,6 +152,7 @@ namespace cas_velocity
         bool dynamic_lights{};
         bool bullet_impacts{};
         bool scoreboard_weapons{};
+        bool preserve_killfeed{};
     };
 
     struct settings
@@ -206,6 +208,10 @@ namespace cas_velocity
         vec3 velocity{};
         float view_pitch{};
         float view_yaw{};
+        float recoil_pitch{};
+        float recoil_yaw{};
+        float weapon_max_speed{ 250.0f };
+        float tick_interval{ 0.015625f };
     };
 
     struct target_state
@@ -213,6 +219,7 @@ namespace cas_velocity
         bool valid{};
         bool alive{};
         bool visible{};
+        bool knife_threat{};
         int health{};
         int estimated_damage{};
         int estimated_hitchance{};
@@ -231,6 +238,8 @@ namespace cas_velocity
         bool quick_peek_retracking{};
         vec3 quick_peek_origin{};
         bool previous_on_ground{};
+        bool rage_fired_this_tick{};
+        bool duckpeek_fake_stand{};
         int ticks_in_air{};
         int doubletap_charge{};
         int last_command_number{};
@@ -248,6 +257,18 @@ namespace cas_velocity
         bool (*can_penetrate)(const vec3& from, const vec3& to, int& damage){};
         void (*request_drop_weapon)(){};
         void (*set_scope)(bool scoped){};
+
+        // Existing cas-plus subsystems can be reused through these stage callbacks.
+        void (*on_lag_records)(){};
+        void (*on_chams_history)(){};
+        void (*on_scoreboard_weapons)(){};
+        void (*on_changer_guns)(){};
+        void (*on_changer_cosmetics)(){};
+        void (*on_world_scene)(){};
+        void (*on_weather)(){};
+        void (*on_impacts)(){};
+        void (*on_misc_stage)(){};
+        void (*on_killfeed_preserve)(){};
     };
 
     struct context
@@ -261,6 +282,7 @@ namespace cas_velocity
     void initialize(context& ctx);
     void reset_runtime(context& ctx);
     void on_create_move(context& ctx, command& cmd);
+    void on_frame_stage(context& ctx, int stage, bool after_original);
 
     float normalize_yaw(float yaw);
     float clamp_pitch(float pitch);
