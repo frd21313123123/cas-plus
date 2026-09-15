@@ -212,9 +212,15 @@ namespace cas_velocity
     {
         bool valid{};
         bool alive{};
+        bool visible{};
         int health{};
+        int estimated_damage{};
+        int estimated_hitchance{};
+        int backtrack_ticks{};
         float distance_sqr{};
         float crosshair_delta_sqr{};
+        float aim_pitch{};
+        float aim_yaw{};
         vec3 origin{};
         vec3 velocity{};
     };
@@ -228,6 +234,7 @@ namespace cas_velocity
         int ticks_in_air{};
         int doubletap_charge{};
         int last_command_number{};
+        int trigger_hold_ticks{};
         float last_real_yaw{};
         float last_fake_yaw{};
     };
