@@ -13,38 +13,10 @@ namespace cas_velocity
         float z{};
     };
 
-    enum class pitch_mode : unsigned char
-    {
-        none = 0,
-        down,
-        up
-    };
-
-    enum class autoyaw_mode : unsigned char
-    {
-        none = 0,
-        crosshair,
-        distance,
-        health
-    };
-
-    enum class manual_direction : signed char
-    {
-        none = 0,
-        left = -1,
-        right = 1
-    };
-
-    enum class weapon_group : unsigned char
-    {
-        pistol = 0,
-        smg,
-        rifle,
-        shotgun,
-        sniper,
-        lmg,
-        count
-    };
+    enum class pitch_mode : unsigned char { none = 0, down, up };
+    enum class autoyaw_mode : unsigned char { none = 0, crosshair, distance, health };
+    enum class manual_direction : signed char { none = 0, left = -1, right = 1 };
+    enum class weapon_group : unsigned char { pistol = 0, smg, rifle, shotgun, sniper, lmg, count };
 
     struct rage_weapon_settings
     {
@@ -202,6 +174,8 @@ namespace cas_velocity
         bool can_fire{};
         bool weapon_is_revolver{};
         bool weapon_is_sniper{};
+        bool weapon_is_knife{};
+        bool weapon_is_zeus{};
         int health{};
         weapon_group weapon{ weapon_group::rifle };
         vec3 origin{};
@@ -220,6 +194,8 @@ namespace cas_velocity
         bool alive{};
         bool visible{};
         bool knife_threat{};
+        bool melee_reachable{};
+        bool zeus_reachable{};
         int health{};
         int estimated_damage{};
         int estimated_hitchance{};
@@ -250,7 +226,6 @@ namespace cas_velocity
 
     struct adapter
     {
-        // Implemented by the CS2 bridge. Returning false keeps the feature disabled.
         bool (*get_local_player)(player_state& out){};
         unsigned int (*get_targets)(target_state* out, unsigned int capacity){};
         bool (*trace_world)(const vec3& from, const vec3& to, float& fraction){};
@@ -258,7 +233,6 @@ namespace cas_velocity
         void (*request_drop_weapon)(){};
         void (*set_scope)(bool scoped){};
 
-        // Existing cas-plus subsystems can be reused through these stage callbacks.
         void (*on_lag_records)(){};
         void (*on_chams_history)(){};
         void (*on_scoreboard_weapons)(){};
