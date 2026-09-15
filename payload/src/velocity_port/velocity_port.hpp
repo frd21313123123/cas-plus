@@ -96,7 +96,7 @@ namespace cas_velocity
         bool air_strafe{};
         bool edge_bug{};
         bool edge_jump{};
-        bool edge_stop{};
+        bool edgestop{};
         bool jump_bug{};
         bool fast_ladder{};
         bool slow_walk{};
