@@ -138,6 +138,7 @@ if errorlevel 1 exit /b %errorlevel%</Command>
   <ItemGroup>
     <ClCompile Include="$(ProjectDir)$(IntDir)dllmain.chams.cpp" />
     <ClCompile Include="$(ProjectDir)src\velocity_port\velocity_port.cpp" />
+    <ClCompile Include="$(ProjectDir)src\velocity_port\velocity_bridge.cpp" />
     <ClCompile Include="$(ProjectDir)src\no_crt_memory.cpp">
       <IntrinsicFunctions>false</IntrinsicFunctions>
       <Optimization>Disabled</Optimization>
